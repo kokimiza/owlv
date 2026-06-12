@@ -57,7 +57,7 @@ drawOrgRow selected idx org =
       row_ = B.hBox [str " ", codeW, str " ", nameW, str " ", actW]
   in if isSelected then withAttr focusedAttr row_ else row_
 
-handleOrgListEv :: BrickEvent Name () -> OrgListState -> AppState -> EventM Name AppState ()
+handleOrgListEv :: BrickEvent Name AppEvent -> OrgListState -> AppState -> EventM Name AppState ()
 handleOrgListEv (VtyEvent (Vty.EvKey Vty.KEsc [])) _ st =
   B.put st{appScreen = ScreenMasterMenu}
 handleOrgListEv (VtyEvent (Vty.EvKey Vty.KUp [])) ls st =
@@ -103,7 +103,7 @@ drawOrgForm cat fs =
     , drawHint "Tab:次へ  Shift+Tab:前へ  ←/→:切替  Enter:確定  Esc:一覧へ"
     ]
 
-handleOrgFormEv :: BrickEvent Name () -> OrgFormState -> AppState -> EventM Name AppState ()
+handleOrgFormEv :: BrickEvent Name AppEvent -> OrgFormState -> AppState -> EventM Name AppState ()
 handleOrgFormEv (VtyEvent (Vty.EvKey Vty.KEsc [])) _ st =
   B.put st{appScreen = ScreenOrgList (initOrgList (appMasters st))}
 handleOrgFormEv (VtyEvent (Vty.EvKey (Vty.KChar '\t') [])) fs st =

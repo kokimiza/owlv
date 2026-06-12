@@ -59,7 +59,8 @@ drawPartnerRow selected idx p =
       row_ = B.hBox [str " ", codeW, str " ", nameW, str " ", typeW, str " ", actW]
   in if isSelected then withAttr focusedAttr row_ else row_
 
-handlePartnerListEv :: BrickEvent Name () -> PartnerListState -> AppState -> EventM Name AppState ()
+handlePartnerListEv ::
+  BrickEvent Name AppEvent -> PartnerListState -> AppState -> EventM Name AppState ()
 handlePartnerListEv (VtyEvent (Vty.EvKey Vty.KEsc [])) _ st =
   B.put st{appScreen = ScreenMasterMenu}
 handlePartnerListEv (VtyEvent (Vty.EvKey Vty.KUp [])) ls st =
@@ -106,7 +107,8 @@ drawPartnerForm cat fs =
     , drawHint "Tab:次へ  Shift+Tab:前へ  ←/→:切替  Enter:確定  Esc:一覧へ"
     ]
 
-handlePartnerFormEv :: BrickEvent Name () -> PartnerFormState -> AppState -> EventM Name AppState ()
+handlePartnerFormEv ::
+  BrickEvent Name AppEvent -> PartnerFormState -> AppState -> EventM Name AppState ()
 handlePartnerFormEv (VtyEvent (Vty.EvKey Vty.KEsc [])) _ st =
   B.put st{appScreen = ScreenPartnerList (initPartnerList (appMasters st))}
 handlePartnerFormEv (VtyEvent (Vty.EvKey (Vty.KChar '\t') [])) fs st =
@@ -160,7 +162,7 @@ submitPartner fs st = do
 
 handleEnumCycle ::
   (Bounded a, Enum a, Eq a) =>
-  BrickEvent Name () -> (a -> s) -> a -> AppState -> (s -> Screen) -> EventM Name AppState ()
+  BrickEvent Name AppEvent -> (a -> s) -> a -> AppState -> (s -> Screen) -> EventM Name AppState ()
 handleEnumCycle (VtyEvent (Vty.EvKey Vty.KLeft [])) mk v st wrap =
   B.put st{appScreen = wrap (mk (cycleL v))}
 handleEnumCycle (VtyEvent (Vty.EvKey Vty.KRight [])) mk v st wrap =
@@ -170,7 +172,12 @@ handleEnumCycle (VtyEvent (Vty.EvKey (Vty.KChar ' ') [])) mk v st wrap =
 handleEnumCycle _ _ _ _ _ = pure ()
 
 handleBoolCycle ::
-  BrickEvent Name () -> (Bool -> s) -> Bool -> AppState -> (s -> Screen) -> EventM Name AppState ()
+  BrickEvent Name AppEvent ->
+  (Bool -> s) ->
+  Bool ->
+  AppState ->
+  (s -> Screen) ->
+  EventM Name AppState ()
 handleBoolCycle ev mk v st wrap = handleEnumCycle ev (\b -> mk (b == BTrue)) (if v then BTrue else BFalse) st wrap
 
 data BoolFlag = BFalse | BTrue deriving (Bounded, Enum, Eq)

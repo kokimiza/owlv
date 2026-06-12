@@ -6,6 +6,7 @@ module Shell.TUI.Types
     Name (..)
   , JName (..)
   , MName (..)
+  , VName (..)
   , MasterKind (..)
 
     -- * Journal form
@@ -13,8 +14,19 @@ module Shell.TUI.Types
   , nextJFocus
   , prevJFocus
   , VoucherKind (..)
+  , ModalKind (..)
+  , ModalState (..)
+  , FieldInputMode (..)
+  , jfInputMode
   , JournalFormState (..)
   , initJournalForm
+
+    -- * Voucher search
+  , VSFocus (..)
+  , VoucherSearchState (..)
+  , VoucherResultState (..)
+  , initVoucherSearch
+  , initVoucherResult
 
     -- * Organisation master
   , OrgFocus (..)
@@ -45,27 +57,32 @@ module Shell.TUI.Types
   , initSubAccList
 
     -- * Top-level
+  , AppEvent (..)
   , Screen (..)
   , AppState (..)
   ) where
 
+import Brick.BChan (BChan)
 import Data.Text (Text)
 import Data.Time (Day, defaultTimeLocale, formatTime)
 
 import Brick.Widgets.Edit qualified as E
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Database.PostgreSQL.Simple qualified as PG
 
 import Core.Domain.AccountCode (unAccountCode)
 import Core.Domain.AccountMaster
   ( AccountCategory (..)
   , AccountMaster (..)
+  , SettlementBehavior (..)
   , defaultNormalBalance
   )
-import Core.Domain.Journal (DrCr (..), JournalActionType (..), RiskTier (..))
+import Core.Domain.Journal (DrCr (..), JournalActionType (..), JournalEntry, RiskTier (..))
 import Core.Domain.Organisation (Organisation (..), OrganisationId (..))
 import Core.Domain.Partner (Partner (..), PartnerId (..), PartnerType (..))
 import Core.Domain.SubAccount (SubAccount (..), SubAccountId (..))
+import Core.Event (Event)
 import Core.State (MasterBook (..))
 import Shell.AppError (AppError)
 import Shell.ErrorCatalog (ErrorCatalog)
@@ -90,15 +107,50 @@ data JName
   | JNL2Amount
   deriving (Eq, Ord, Show)
 
+data VName = VNDateFrom | VNDateTo | VNOrg | VNMemo
+  deriving (Eq, Ord, Show)
+
 data Name
   = NJournal JName
   | NMaster MasterKind MName
+  | NVoucher VName
   deriving (Eq, Ord, Show)
 
 -- ── Journal form ─────────────────────────────────────────────────────────────
 
 data VoucherKind = VKAttached | VKPending
   deriving (Bounded, Enum, Eq, Show)
+
+-- | どのマスタ参照モーダルを開くか
+data ModalKind = ModalOrg | ModalAccount
+  deriving (Eq, Show)
+
+-- | フローティングリスト（マスタ参照モーダル）の状態
+data ModalState = ModalState
+  { msKind :: ModalKind
+  , msTarget :: FormFocus -- 確定時に書き込むフィールド
+  , msItems :: [(Text, Text)] -- (コード, 表示名)
+  , msSelected :: Int
+  }
+  deriving (Eq, Show)
+
+-- | フィールドごとの入力モード（あらかじめ定義）
+data FieldInputMode
+  = FreeInput -- テキスト自由入力
+  | MasterRef ModalKind -- Space でマスタ参照モーダルを起動
+  | CycleField -- ←/→ で択一サイクル
+
+-- | 仕訳フォーム各フィールドの入力モード定義
+jfInputMode :: FormFocus -> FieldInputMode
+jfInputMode FFOrg = MasterRef ModalOrg
+jfInputMode FFL1Account = MasterRef ModalAccount
+jfInputMode FFL2Account = MasterRef ModalAccount
+jfInputMode FFActionType = CycleField
+jfInputMode FFRiskTier = CycleField
+jfInputMode FFVoucherKind = CycleField
+jfInputMode FFL1DrCr = CycleField
+jfInputMode FFL2DrCr = CycleField
+jfInputMode _ = FreeInput
 
 data FormFocus
   = FFOrg
@@ -146,6 +198,8 @@ data JournalFormState = JournalFormState
   , jfL2DrCr :: DrCr
   , jfL2Amt :: E.Editor Text Name
   , jfError :: Maybe AppError
+  , jfModal :: Maybe ModalState -- フローティングリスト（Nothing = 非表示）
+  , jfLoading :: Bool -- True while async command is in flight
   }
 
 initJournalForm :: Day -> JournalFormState
@@ -166,6 +220,8 @@ initJournalForm today =
     , jfL2DrCr = Credit
     , jfL2Amt = ed (NJournal JNL2Amount) ""
     , jfError = Nothing
+    , jfModal = Nothing
+    , jfLoading = False
     }
  where
   ed n s = E.editor n (Just 1) (T.pack s)
@@ -286,6 +342,7 @@ data AccountFormState = AccountFormState
   , affName :: E.Editor Text Name
   , affCategory :: AccountCategory
   , affNormalBal :: DrCr
+  , affSettlement :: SettlementBehavior
   , affActive :: Bool
   , affError :: Maybe AppError
   , affIsNew :: Bool
@@ -299,6 +356,7 @@ initAccountForm Nothing =
     , affName = mEd MKAccount 1 ""
     , affCategory = Asset
     , affNormalBal = defaultNormalBalance Asset
+    , affSettlement = SelfContained
     , affActive = True
     , affError = Nothing
     , affIsNew = True
@@ -310,6 +368,7 @@ initAccountForm (Just am) =
     , affName = mEd MKAccount 1 (T.unpack (amName am))
     , affCategory = amCategory am
     , affNormalBal = amNormalBalance am
+    , affSettlement = amSettlement am
     , affActive = amActive am
     , affError = Nothing
     , affIsNew = False
@@ -326,6 +385,45 @@ initAccountList mb =
     { alAccounts = map snd (Map.toAscList (masterAccounts mb))
     , alSelected = 0
     }
+
+-- ── Voucher search ───────────────────────────────────────────────────────────
+
+data VSFocus
+  = VSFDateFrom
+  | VSFDateTo
+  | VSFOrg
+  | VSFMemo
+  | VSFSearch
+  | VSFCancel
+  deriving (Bounded, Enum, Eq, Ord, Show)
+
+data VoucherSearchState = VoucherSearchState
+  { vsDateFrom :: E.Editor Text Name -- 開始日 (空 = 上限なし)
+  , vsDateTo :: E.Editor Text Name -- 終了日 (空 = 上限なし)
+  , vsOrg :: E.Editor Text Name -- 入力部門コード (空 = 全部門)
+  , vsMemo :: E.Editor Text Name -- 摘要キーワード (空 = 全件)
+  , vsFocus :: VSFocus
+  , vsError :: Maybe AppError
+  }
+
+data VoucherResultState = VoucherResultState
+  { vrEntries :: [JournalEntry] -- 日付降順ソート済み
+  , vrSelected :: Int
+  }
+
+initVoucherSearch :: VoucherSearchState
+initVoucherSearch =
+  VoucherSearchState
+    { vsDateFrom = E.editor (NVoucher VNDateFrom) (Just 1) ""
+    , vsDateTo = E.editor (NVoucher VNDateTo) (Just 1) ""
+    , vsOrg = E.editor (NVoucher VNOrg) (Just 1) ""
+    , vsMemo = E.editor (NVoucher VNMemo) (Just 1) ""
+    , vsFocus = VSFDateFrom
+    , vsError = Nothing
+    }
+
+initVoucherResult :: [JournalEntry] -> VoucherResultState
+initVoucherResult entries = VoucherResultState{vrEntries = entries, vrSelected = 0}
 
 -- ── SubAccount master ────────────────────────────────────────────────────────
 
@@ -376,10 +474,18 @@ initSubAccList mb =
     , slSelected = 0
     }
 
+-- ── Async app events ─────────────────────────────────────────────────────────
+
+-- | Events produced by worker threads and delivered to brick via BChan.
+data AppEvent
+  = CommandFinished (Either AppError [Event])
+  | MastersLoaded (Either AppError MasterBook)
+
 -- ── Top-level screen + AppState ──────────────────────────────────────────────
 
 data Screen
-  = ScreenMenu
+  = ScreenLoading
+  | ScreenMenu
   | ScreenMasterMenu
   | ScreenJournalForm JournalFormState
   | ScreenOrgList OrgListState
@@ -390,12 +496,17 @@ data Screen
   | ScreenAccountForm AccountFormState
   | ScreenSubAccList SubAccListState
   | ScreenSubAccForm SubAccFormState
+  | ScreenVoucherSearch VoucherSearchState
+  | ScreenVoucherResult VoucherResultState
+  | ScreenVoucherDetail JournalEntry VoucherResultState
 
 data AppState = AppState
   { appScreen :: Screen
-  , appStore :: EventStore
+  , appStore :: EventStore -- synchronous handlers (master CRUD)
+  , appConn :: PG.Connection -- effectful interpreters
+  , appChan :: BChan AppEvent -- worker → brick event channel
   , appMasters :: MasterBook
-  , appCatalog :: ErrorCatalog -- 起動時に一度だけロードする文言カタログ
+  , appCatalog :: ErrorCatalog
   }
 
 -- ── internal helpers ─────────────────────────────────────────────────────────

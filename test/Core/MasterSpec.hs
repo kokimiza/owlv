@@ -11,7 +11,7 @@ import Data.Map.Strict qualified as Map
 import Core.Command (Command (..))
 import Core.Decide (decide)
 import Core.Domain.AccountCode (mkAccountCode)
-import Core.Domain.AccountMaster (AccountCategory (..), AccountMaster (..))
+import Core.Domain.AccountMaster (AccountCategory (..), AccountMaster (..), SettlementBehavior (..))
 import Core.Domain.Journal (DrCr (..))
 import Core.Domain.Organisation (Organisation (..), OrganisationId (..))
 import Core.Domain.Partner (Partner (..), PartnerId (..), PartnerType (..))
@@ -31,7 +31,7 @@ mkPartner code name = Partner (PartnerId code) name Customer True
 mkAccount :: Text -> Text -> AccountMaster
 mkAccount code name =
   case mkAccountCode code of
-    Right ac -> AccountMaster ac name Asset Debit True
+    Right ac -> AccountMaster ac name Asset Debit SelfContained True
     Left _ -> error "bad account code in test"
 
 -- ── Test tree ────────────────────────────────────────────────────────────────

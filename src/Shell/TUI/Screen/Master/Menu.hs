@@ -40,7 +40,7 @@ drawMasterMenu =
               , withAttr hintAttr (BC.hCenter (str "[ Esc ] メインメニューへ"))
               ]
 
-handleMasterMenuEv :: BrickEvent Name () -> AppState -> EventM Name AppState ()
+handleMasterMenuEv :: BrickEvent Name AppEvent -> AppState -> EventM Name AppState ()
 handleMasterMenuEv (VtyEvent (Vty.EvKey (Vty.KChar '1') [])) st =
   B.put st{appScreen = ScreenOrgList (initOrgList (appMasters st))}
 handleMasterMenuEv (VtyEvent (Vty.EvKey (Vty.KChar '2') [])) st =

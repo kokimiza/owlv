@@ -1,2 +1,9 @@
 packages: .
 with-compiler: ghc-9.14.1
+allow-newer: postgresql-simple:base, postgresql-simple:template-haskell
+
+-- libpq は keg-only なので pkg-config path を明示する
+package postgresql-libpq
+  extra-lib-dirs: /opt/homebrew/opt/libpq/lib
+  extra-include-dirs: /opt/homebrew/opt/libpq/include
+  pkgconfig-depends: libpq

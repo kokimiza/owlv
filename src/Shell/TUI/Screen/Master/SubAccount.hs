@@ -58,7 +58,8 @@ drawSubAccRow selected idx sa =
       row_ = B.hBox [str " ", codeW, str " ", nameW, str " ", parentW, str " ", actW]
   in if isSelected then withAttr focusedAttr row_ else row_
 
-handleSubAccListEv :: BrickEvent Name () -> SubAccListState -> AppState -> EventM Name AppState ()
+handleSubAccListEv ::
+  BrickEvent Name AppEvent -> SubAccListState -> AppState -> EventM Name AppState ()
 handleSubAccListEv (VtyEvent (Vty.EvKey Vty.KEsc [])) _ st =
   B.put st{appScreen = ScreenMasterMenu}
 handleSubAccListEv (VtyEvent (Vty.EvKey Vty.KUp [])) ls st =
@@ -103,7 +104,8 @@ drawSubAccForm cat fs =
     , drawHint "Tab:次へ  Shift+Tab:前へ  ←/→:切替  Enter:確定  Esc:一覧へ"
     ]
 
-handleSubAccFormEv :: BrickEvent Name () -> SubAccFormState -> AppState -> EventM Name AppState ()
+handleSubAccFormEv ::
+  BrickEvent Name AppEvent -> SubAccFormState -> AppState -> EventM Name AppState ()
 handleSubAccFormEv (VtyEvent (Vty.EvKey Vty.KEsc [])) _ st =
   B.put st{appScreen = ScreenSubAccList (initSubAccList (appMasters st))}
 handleSubAccFormEv (VtyEvent (Vty.EvKey (Vty.KChar '\t') [])) fs st =

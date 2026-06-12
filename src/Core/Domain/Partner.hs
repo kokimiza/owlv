@@ -6,12 +6,20 @@ module Core.Domain.Partner
   , showPartnerType
   ) where
 
+import Data.Aeson (FromJSON (..), ToJSON (..))
 import Data.Text (Text)
+import GHC.Generics (Generic)
 
 import Data.Text qualified as T
 
 newtype PartnerId = PartnerId {unPartnerId :: Text}
   deriving (Eq, Ord, Show)
+
+instance ToJSON PartnerId where
+  toJSON = toJSON . unPartnerId
+
+instance FromJSON PartnerId where
+  parseJSON = fmap PartnerId . parseJSON
 
 mkPartnerId :: Text -> Either Text PartnerId
 mkPartnerId t
@@ -19,7 +27,10 @@ mkPartnerId t
   | otherwise = Right (PartnerId t)
 
 data PartnerType = Customer | Vendor | BothTypes
-  deriving (Bounded, Enum, Eq, Show)
+  deriving (Bounded, Enum, Eq, Generic, Show)
+
+instance ToJSON PartnerType
+instance FromJSON PartnerType
 
 showPartnerType :: PartnerType -> Text
 showPartnerType Customer = "得意先"
@@ -32,4 +43,7 @@ data Partner = Partner
   , partnerType :: PartnerType
   , partnerActive :: Bool
   }
-  deriving (Eq, Show)
+  deriving (Eq, Generic, Show)
+
+instance ToJSON Partner
+instance FromJSON Partner

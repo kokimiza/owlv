@@ -1,8 +1,11 @@
--- | Journal form submission pipeline.
+-- | Journal form submission — async dispatch via BChan.
 module Shell.TUI.Submit
-  ( submitJournalEntry
+  ( dispatchJournalSubmit
   ) where
 
+import Brick.BChan (BChan, writeBChan)
+import Control.Concurrent (forkIO)
+import Control.Monad (void)
 import Data.Decimal (Decimal)
 import Data.Text (Text)
 import Data.Time (Day, defaultTimeLocale, parseTimeM)
@@ -26,21 +29,34 @@ import Core.Domain.Journal
 import Core.Domain.Money (mkMoney)
 import Core.Domain.Organisation (OrganisationId (..), mkOrganisationId)
 import Shell.AppError (AppError (..))
-import Shell.CommandExecutor (executeCommand)
+import Shell.CommandExecutor (executeCommandEff)
 import Shell.EventStore (EventStore)
+import Shell.Interpreters.AuditLog (runAuditLogNoOp)
+import Shell.Interpreters.Clock (runClockReal)
+import Shell.Interpreters.EventStore (runEventStorePg)
+import Shell.Interpreters.UserContext (runUserCtxFixed)
 import Shell.TUI.Helpers (edText)
 import Shell.TUI.Types
 
-submitJournalEntry :: EventStore -> JournalFormState -> IO (Either AppError ())
-submitJournalEntry store jf =
-  runEff . runErrorNoCallStack @AppError $ do
-    entry <- parseFormData jf
-    result <- liftIO (executeCommand store (RecordJournalEntry entry))
-    case result of
-      Left err -> throwError err
-      Right _ -> pure ()
+{- | Parse the form, fire executeCommandEff on a worker thread, and deliver
+the result back to brick via BChan. Returns immediately so the UI stays
+responsive.
+-}
+dispatchJournalSubmit :: BChan AppEvent -> EventStore -> JournalFormState -> IO ()
+dispatchJournalSubmit chan store jf = void $ forkIO $ do
+  result <-
+    runEff
+      . runErrorNoCallStack @AppError
+      . runEventStorePg store
+      . runClockReal
+      . runUserCtxFixed "system"
+      . runAuditLogNoOp
+      $ do
+        entry <- parseFormData jf
+        executeCommandEff (RecordJournalEntry entry)
+  writeBChan chan (CommandFinished result)
 
--- ── parsing ─────────────────────────────────────────────────────────────────
+-- ── form parsing ─────────────────────────────────────────────────────────────
 
 type AppEff es = (IOE :> es, Error AppError :> es)
 
@@ -85,13 +101,9 @@ parseLine ::
   (Error AppError :> es) =>
   E.Editor Text Name -> DrCr -> E.Editor Text Name -> Eff es JournalLine
 parseLine accEd dc amtEd = do
-  ac <-
-    either
-      (throwError . AppInputError)
-      pure
-      (mkAccountCode (edText accEd))
+  ac <- either (throwError . AppInputError) pure (mkAccountCode (edText accEd))
   amt <- parseDecimal (edText amtEd)
-  pure (JournalLine ac dc (mkMoney amt))
+  pure (JournalLine ac dc (mkMoney amt) Nothing)
 
 parseDecimal :: (Error AppError :> es) => Text -> Eff es Decimal
 parseDecimal t = case reads (T.unpack t) of

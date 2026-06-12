@@ -61,7 +61,8 @@ drawAccountRow selected idx am =
       row_ = B.hBox [str " ", codeW, str " ", nameW, str " ", catW, str " ", balW, str " ", actW]
   in if isSelected then withAttr focusedAttr row_ else row_
 
-handleAccountListEv :: BrickEvent Name () -> AccountListState -> AppState -> EventM Name AppState ()
+handleAccountListEv ::
+  BrickEvent Name AppEvent -> AccountListState -> AppState -> EventM Name AppState ()
 handleAccountListEv (VtyEvent (Vty.EvKey Vty.KEsc [])) _ st =
   B.put st{appScreen = ScreenMasterMenu}
 handleAccountListEv (VtyEvent (Vty.EvKey Vty.KUp [])) ls st =
@@ -112,7 +113,8 @@ drawAccountForm cat fs =
     , drawHint "Tab:次へ  Shift+Tab:前へ  ←/→:切替  Enter:確定  Esc:一覧へ"
     ]
 
-handleAccountFormEv :: BrickEvent Name () -> AccountFormState -> AppState -> EventM Name AppState ()
+handleAccountFormEv ::
+  BrickEvent Name AppEvent -> AccountFormState -> AppState -> EventM Name AppState ()
 handleAccountFormEv (VtyEvent (Vty.EvKey Vty.KEsc [])) _ st =
   B.put st{appScreen = ScreenAccountList (initAccountList (appMasters st))}
 handleAccountFormEv (VtyEvent (Vty.EvKey (Vty.KChar '\t') [])) fs st =
@@ -170,6 +172,7 @@ submitAccount fs st = do
               , amName = edText (affName fs)
               , amCategory = affCategory fs
               , amNormalBalance = affNormalBal fs
+              , amSettlement = affSettlement fs
               , amActive = affActive fs
               }
           cmd = if affIsNew fs then RegisterAccountMaster am else UpdateAccountMaster am

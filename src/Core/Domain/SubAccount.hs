@@ -4,7 +4,9 @@ module Core.Domain.SubAccount
   , mkSubAccountId
   ) where
 
+import Data.Aeson (FromJSON (..), ToJSON (..))
 import Data.Text (Text)
+import GHC.Generics (Generic)
 
 import Data.Text qualified as T
 
@@ -12,6 +14,12 @@ import Core.Domain.AccountCode (AccountCode)
 
 newtype SubAccountId = SubAccountId {unSubAccountId :: Text}
   deriving (Eq, Ord, Show)
+
+instance ToJSON SubAccountId where
+  toJSON = toJSON . unSubAccountId
+
+instance FromJSON SubAccountId where
+  parseJSON = fmap SubAccountId . parseJSON
 
 mkSubAccountId :: Text -> Either Text SubAccountId
 mkSubAccountId t
@@ -24,4 +32,7 @@ data SubAccount = SubAccount
   , saParent :: AccountCode
   , saActive :: Bool
   }
-  deriving (Eq, Show)
+  deriving (Eq, Generic, Show)
+
+instance ToJSON SubAccount
+instance FromJSON SubAccount

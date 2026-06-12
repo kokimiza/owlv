@@ -52,7 +52,7 @@ instance Arbitrary DrCr where
   arbitrary = elements [Debit, Credit]
 
 instance Arbitrary JournalLine where
-  arbitrary = JournalLine <$> arbitrary <*> arbitrary <*> arbitrary
+  arbitrary = JournalLine <$> arbitrary <*> arbitrary <*> arbitrary <*> pure Nothing
 
 instance Arbitrary JournalActionType where
   arbitrary = elements [minBound .. maxBound]
@@ -118,7 +118,7 @@ balancedEntry eid day act priorRef =
  where
   ac = case mkAccountCode "1010" of Right a -> a; Left _ -> error "unreachable"
   amount = mkMoney 1000
-  line dc = JournalLine ac dc amount
+  line dc = JournalLine ac dc amount Nothing
 
 -- ── Property: balanced entry ──────────────────────────────────────────────
 
@@ -135,7 +135,7 @@ instance Arbitrary BalancedEntry where
     ac2 <- arbitrary
     voucher <- arbitrary
     memo <- case voucher of VoucherPending -> genRefText; _ -> pure ""
-    let ls = JournalLine ac1 Debit amount :| [JournalLine ac2 Credit amount]
+    let ls = JournalLine ac1 Debit amount Nothing :| [JournalLine ac2 Credit amount Nothing]
     pure (BalancedEntry (JournalEntry eid testOrgId day act Low voucher priorRef memo ls))
 
 -- ── Test tree ──────────────────────────────────────────────────────────────
@@ -161,7 +161,7 @@ decideTests =
           let ac = case mkAccountCode "1010" of Right a -> a; Left _ -> error "unreachable"
               eid = JournalEntryId (UUID.fromWords 0 0 0 1)
               day = ModifiedJulianDay 59000
-              ls = JournalLine ac Debit dr :| [JournalLine ac Credit cr]
+              ls = JournalLine ac Debit dr Nothing :| [JournalLine ac Credit cr Nothing]
               entry = JournalEntry eid testOrgId day NewEntry Low (VoucherAttached "X") Nothing "" ls
           in case decide testBook (RecordJournalEntry entry) of
                Left (UnbalancedEntry _ _) -> True
@@ -176,7 +176,7 @@ decideTests =
       let eid = JournalEntryId (UUID.fromWords 0 0 0 2)
           day = ModifiedJulianDay 59001
           ac = case mkAccountCode "2010" of Right a -> a; Left _ -> error "unreachable"
-          ls = JournalLine ac Debit (mkMoney 500) :| [JournalLine ac Credit (mkMoney 500)]
+          ls = JournalLine ac Debit (mkMoney 500) Nothing :| [JournalLine ac Credit (mkMoney 500) Nothing]
           entry = JournalEntry eid testOrgId day NewEntry Low VoucherPending Nothing "" ls
       decide testBook (RecordJournalEntry entry)
         @?= Left PendingVoucherMissingMemo
@@ -192,7 +192,7 @@ decideTests =
       let eid = JournalEntryId (UUID.fromWords 0 0 0 3)
           day = ModifiedJulianDay 59003
           ac = case mkAccountCode "1010" of Right a -> a; Left _ -> error "unreachable"
-          ls = JournalLine ac Debit (mkMoney 100) :| [JournalLine ac Credit (mkMoney 100)]
+          ls = JournalLine ac Debit (mkMoney 100) Nothing :| [JournalLine ac Credit (mkMoney 100) Nothing]
           entry = JournalEntry eid (OrganisationId "GHOST") day NewEntry Low (VoucherAttached "X") Nothing "" ls
       case decide testBook (RecordJournalEntry entry) of
         Left (OrgNotFound _) -> pure ()

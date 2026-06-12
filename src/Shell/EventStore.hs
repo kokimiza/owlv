@@ -1,45 +1,190 @@
-{- | EventStore abstraction.
+{- | Append-only event store backed by PostgreSQL, with optimistic concurrency control.
 
-Designed for a *local* PostgreSQL instance (same host as the app).
-For now the only concrete implementation is in-memory (IORef).
-The Postgres implementation is stubbed; it will be wired once the
-local PG server is running — connect logic goes in newPostgresEventStore.
+Schema (run once per database, handled by migrate):
+  CREATE TABLE IF NOT EXISTS events (
+    seq         BIGSERIAL    PRIMARY KEY,
+    event_type  TEXT         NOT NULL,
+    payload     TEXT         NOT NULL,
+    recorded_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+  );
+  CREATE TABLE IF NOT EXISTS stream_version (
+    id      INT    PRIMARY KEY,
+    version BIGINT NOT NULL DEFAULT 0
+  );
+
+Connection is configured via libpq environment variables:
+  PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD
+
+Optimistic concurrency:
+  esLoad returns the current StreamVersion alongside events.
+  esAppend takes the expected StreamVersion; if another writer has already
+  advanced the version, it returns Left AppConcurrencyConflict without writing.
+  CommandExecutor retries the full load→decide→append cycle on conflict.
 -}
 module Shell.EventStore
-  ( EventStore (..)
-  , newInMemoryEventStore
-  -- , newPostgresEventStore  -- uncomment when PG is configured
+  ( StreamVersion (..)
+  , EventStore (..)
+  , connectAndMigrate
+  , pgStore
+  , newPostgresEventStore
   ) where
 
 import Control.Exception (SomeException, try)
-import Data.IORef
+import Data.Int (Int64)
+import Data.Text (Text)
 
+import Data.Aeson qualified as Aeson
+import Data.Aeson.Key qualified as AesonKey
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString.Char8 qualified as BS8
+import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
+import Database.PostgreSQL.Simple qualified as PG
 
 import Core.Event (Event)
 import Shell.AppError (AppError (..))
 
+-- | ストリームのイベント追記回数。楽観ロックの比較値として使う。
+newtype StreamVersion = StreamVersion Int64
+  deriving (Eq, Ord, Show)
+
 {- | Interface for the append-only event store.
-Both fields return IO (Either AppError _) — no exceptions escape.
+esLoad returns the current version together with events.
+esAppend takes the expected version and returns AppConcurrencyConflict when
+another writer has already advanced the stream.
 -}
 data EventStore = EventStore
-  { esLoad :: IO (Either AppError [Event])
-  , esAppend :: [Event] -> IO (Either AppError ())
+  { esLoad :: IO (Either AppError (StreamVersion, [Event]))
+  , esAppend :: StreamVersion -> [Event] -> IO (Either AppError ())
   }
 
-{- | In-memory implementation backed by IORef.
-Suitable for tests and early development.
+{- | Connect to PostgreSQL and run schema migration. Returns the raw connection
+so callers can pass it to both pgStore and the effectful interpreters.
 -}
-newInMemoryEventStore :: IO EventStore
-newInMemoryEventStore = do
-  ref <- newIORef []
-  pure
-    EventStore
-      { esLoad = safeIO (readIORef ref)
-      , esAppend = \evts -> safeIO (modifyIORef' ref (<> evts))
-      }
+connectAndMigrate :: IO (Either AppError PG.Connection)
+connectAndMigrate = do
+  result <- try @SomeException (PG.connectPostgreSQL "")
+  case result of
+    Left ex ->
+      pure
+        ( Left
+            ( AppStorageError
+                ( T.unlines
+                    [ "PostgreSQL 接続失敗"
+                    , ""
+                    , "接続情報を libpq 環境変数で設定してください:"
+                    , "  export PGHOST=localhost"
+                    , "  export PGPORT=5432"
+                    , "  export PGDATABASE=owlv"
+                    , "  export PGUSER=postgres"
+                    , "  export PGPASSWORD=..."
+                    , ""
+                    , "詳細: " <> T.pack (show ex)
+                    ]
+                )
+            )
+        )
+    Right conn -> do
+      migResult <- try @SomeException (migrate conn)
+      case migResult of
+        Left ex -> pure (Left (AppStorageError (T.pack (show ex))))
+        Right () -> pure (Right conn)
 
--- ── helpers ────────────────────────────────────────────────────────────────
+-- | Wrap a connection in the record-of-functions interface.
+pgStore :: PG.Connection -> EventStore
+pgStore = mkPgStore
+
+-- | Convenience: connect, migrate, and build the EventStore record.
+newPostgresEventStore :: IO (Either AppError EventStore)
+newPostgresEventStore = fmap (fmap mkPgStore) connectAndMigrate
+
+-- ── internal ────────────────────────────────────────────────────────────────
+
+migrate :: PG.Connection -> IO ()
+migrate conn = do
+  _ <-
+    PG.execute_
+      conn
+      "CREATE TABLE IF NOT EXISTS events \
+      \( seq         BIGSERIAL    PRIMARY KEY \
+      \, event_type  TEXT         NOT NULL    \
+      \, payload     TEXT         NOT NULL    \
+      \, recorded_at TIMESTAMPTZ  NOT NULL DEFAULT NOW() \
+      \)"
+  _ <-
+    PG.execute_
+      conn
+      "CREATE TABLE IF NOT EXISTS stream_version \
+      \( id      INT    PRIMARY KEY \
+      \, version BIGINT NOT NULL DEFAULT 0 \
+      \)"
+  -- バージョンを既存イベント数で初期化（既に行がある場合は何もしない）
+  _ <-
+    PG.execute_
+      conn
+      "INSERT INTO stream_version (id, version) \
+      \SELECT 1, COUNT(*) FROM events \
+      \ON CONFLICT (id) DO NOTHING"
+  pure ()
+
+mkPgStore :: PG.Connection -> EventStore
+mkPgStore conn =
+  EventStore
+    { esLoad = safeIO (loadFromPg conn)
+    , esAppend = appendToPg conn
+    }
+
+loadFromPg :: PG.Connection -> IO (StreamVersion, [Event])
+loadFromPg conn = do
+  [PG.Only ver] <-
+    PG.query_ conn "SELECT version FROM stream_version WHERE id = 1" :: IO [PG.Only Int64]
+  rows <-
+    PG.query_ conn "SELECT payload FROM events ORDER BY seq ASC" :: IO [PG.Only Text]
+  events <- mapM decodeRow rows
+  pure (StreamVersion ver, events)
+ where
+  decodeRow (PG.Only txt) =
+    case Aeson.eitherDecodeStrict (BS8.pack (T.unpack txt)) of
+      Left err -> fail ("event decode failed: " <> err)
+      Right ev -> pure ev
+
+-- | バージョンが一致する場合のみ追記し、version カウンタを進める。
+appendToPg :: PG.Connection -> StreamVersion -> [Event] -> IO (Either AppError ())
+appendToPg conn (StreamVersion expected) evts = do
+  result <- try @SomeException $ PG.withTransaction conn $ do
+    -- FOR UPDATE でバージョン行を行ロック → 同時書き込みを直列化
+    [PG.Only current] <-
+      PG.query_ conn "SELECT version FROM stream_version WHERE id = 1 FOR UPDATE" ::
+        IO [PG.Only Int64]
+    if current /= expected
+      then pure (Left AppConcurrencyConflict)
+      else do
+        mapM_ insertOne evts
+        _ <-
+          PG.execute
+            conn
+            "UPDATE stream_version SET version = version + ? WHERE id = 1"
+            (PG.Only (fromIntegral (length evts) :: Int64))
+        pure (Right ())
+  pure $ case result of
+    Left ex -> Left (AppStorageError (T.pack (show ex)))
+    Right x -> x
+ where
+  insertOne ev =
+    let payload = T.pack (BS8.unpack (LBS.toStrict (Aeson.encode ev)))
+        typ = eventType ev
+    in PG.execute
+         conn
+         "INSERT INTO events (event_type, payload) VALUES (?, ?)"
+         (typ :: Text, payload :: Text)
+
+eventType :: Event -> Text
+eventType ev = case Aeson.toJSON ev of
+  Aeson.Object km ->
+    case KeyMap.lookup (AesonKey.fromString "type") km of
+      Just (Aeson.String t) -> t
+      _ -> "Unknown"
+  _ -> "Unknown"
 
 -- | Catch any synchronous exception and wrap it as a StorageError.
 safeIO :: IO a -> IO (Either AppError a)
@@ -48,22 +193,3 @@ safeIO action = do
   pure $ case result of
     Left ex -> Left (AppStorageError (T.pack (show ex)))
     Right v -> Right v
-
--- ── PostgreSQL stub ─────────────────────────────────────────────────────────
--- Future: connect to local PostgreSQL (not remote).
--- Schema: a single `events` table:
---   (seq BIGSERIAL, event_type TEXT, payload JSONB, recorded_at TIMESTAMPTZ)
--- All inserts are append-only; UPDATE / DELETE on this table are forbidden.
---
--- newPostgresEventStore :: ByteString -> IO (Either AppError EventStore)
--- newPostgresEventStore connStr = do
---   result <- try @SomeException (PG.connectPostgreSQL connStr)
---   case result of
---     Left  ex   -> pure (Left (ConnectionError (T.pack (show ex))))
---     Right conn -> pure (Right (pgStore conn))
---
--- pgStore :: PG.Connection -> EventStore
--- pgStore conn = EventStore
---   { esLoad   = safeIO (loadFromPg conn)
---   , esAppend = \evts -> safeIO (appendToPg conn evts)
---   }

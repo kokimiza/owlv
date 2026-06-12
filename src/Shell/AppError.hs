@@ -16,6 +16,8 @@ data AppError
   | AppStorageError Text -- DB / シリアライズエラー
   | AppConnectionError Text -- ネットワーク / ファイルエラー
   | AppNotFound Text
+  | -- | 楽観ロック競合; executeCommand がリトライ上限超過時に返す
+    AppConcurrencyConflict
   deriving (Eq, Show)
 
 fromDomainError :: DomainError -> AppError

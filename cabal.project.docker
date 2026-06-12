@@ -1,0 +1,8 @@
+-- Linux コンテナ用 cabal project。
+-- cabal.project の Homebrew パス（macOS 専用）を除き、libpq はシステム pkg-config で解決する。
+-- Dockerfile 内で cabal.project としてコピーして使用する。
+packages: .
+allow-newer: postgresql-simple:base, postgresql-simple:template-haskell
+
+package postgresql-libpq
+  pkgconfig-depends: libpq

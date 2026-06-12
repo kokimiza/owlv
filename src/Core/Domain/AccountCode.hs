@@ -4,12 +4,24 @@ module Core.Domain.AccountCode
   , unAccountCode
   ) where
 
+import Data.Aeson (FromJSON (..), ToJSON (..))
 import Data.Text (Text)
 
 import Data.Text qualified as T
 
 newtype AccountCode = AccountCode Text
   deriving (Eq, Ord, Show)
+
+-- | Store as plain text; deserialize via mkAccountCode for validation.
+instance ToJSON AccountCode where
+  toJSON (AccountCode t) = toJSON t
+
+instance FromJSON AccountCode where
+  parseJSON v = do
+    t <- parseJSON v
+    case mkAccountCode t of
+      Right ac -> pure ac
+      Left err -> fail (T.unpack err)
 
 mkAccountCode :: Text -> Either Text AccountCode
 mkAccountCode t

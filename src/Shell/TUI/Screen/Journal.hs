@@ -19,13 +19,14 @@ import Data.Text (Text)
 import Brick qualified as B
 import Brick.Widgets.Border qualified as BB
 import Brick.Widgets.Border.Style qualified as BBS
+import Brick.Widgets.Center qualified as BC
 import Brick.Widgets.Edit qualified as E
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Graphics.Vty qualified as Vty
 
-import Core.Domain.AccountCode (mkAccountCode)
-import Core.Domain.AccountMaster (AccountMaster (..))
+import Core.Domain.AccountCode (mkAccountCode, unAccountCode)
+import Core.Domain.AccountMaster (AccountMaster (..), showAccountCategory)
 import Core.Domain.Journal (DrCr (..), JournalActionType (..), RiskTier (..))
 import Core.Domain.Money (addMoney, unMoney, zeroMoney)
 import Core.Domain.Organisation (Organisation (..), OrganisationId (..))
@@ -33,15 +34,23 @@ import Core.State (MasterBook (..))
 import Shell.ErrorCatalog (ErrorCatalog, renderAppError)
 import Shell.TUI.Attrs
 import Shell.TUI.Helpers
-import Shell.TUI.Submit (submitJournalEntry)
+import Shell.TUI.Submit (dispatchJournalSubmit)
 import Shell.TUI.Types
 
 import Core.Domain.Money qualified as M
 
 -- ── Draw ─────────────────────────────────────────────────────────────────────
 
-drawJournalForm :: ErrorCatalog -> MasterBook -> JournalFormState -> Widget Name
+-- | 仕訳フォームを描画する。モーダルが開いている場合は 2 レイヤーを返す。
+drawJournalForm :: ErrorCatalog -> MasterBook -> JournalFormState -> [Widget Name]
 drawJournalForm cat masters jf =
+  let mainW = drawJournalMain cat masters jf
+  in case jfModal jf of
+       Nothing -> [mainW]
+       Just ms -> [drawJournalModal ms, mainW]
+
+drawJournalMain :: ErrorCatalog -> MasterBook -> JournalFormState -> Widget Name
+drawJournalMain cat masters jf =
   B.vBox
     [ B.withBorderStyle BBS.unicodeBold $
         BB.borderWithLabel (withAttr titleAttr (str " 原始記録入力 (§2.1) ")) $
@@ -55,8 +64,10 @@ drawJournalForm cat masters jf =
               , BB.hBorder
               , drawButtons jf
               ]
-    , drawError (fmap (renderAppError cat) (jfError jf))
-    , drawHint "Tab:次へ  Shift+Tab:前へ  ←/→:選択変更  Enter:確定  Esc:メニューへ"
+    , if jfLoading jf
+        then withAttr hintAttr (str " 処理中...")
+        else drawError (fmap (renderAppError cat) (jfError jf))
+    , drawHint "Tab:次へ  Shift+Tab:前へ  Space:マスタ参照  ←/→:選択変更  Enter:確定  Esc:メニューへ"
     ]
 
 drawFormFields :: MasterBook -> JournalFormState -> Widget Name
@@ -65,9 +76,11 @@ drawFormFields masters jf =
       orgHint = fromMaybe "" (lookupOrgName masters orgCode)
   in B.vBox
        [ row "入力部門    " $
-           renderTextEd (jfFocus jf == FFOrg) (jfOrg jf)
-             `hcat` str " "
-             `hcat` withAttr hintAttr (txt orgHint)
+           B.hBox
+             [ renderTextEd (jfFocus jf == FFOrg) (jfOrg jf)
+             , withAttr hintAttr (str " [Space:参照] ")
+             , withAttr hintAttr (txt orgHint)
+             ]
        , row "取引発生日  " $
            renderTextEd (jfFocus jf == FFDate) (jfDate jf)
              `hcat` withAttr hintAttr (str " (YYYY-MM-DD)")
@@ -123,12 +136,11 @@ drawLine ::
   E.Editor Text Name ->
   Widget Name
 drawLine masters idx cur fAcc fDC fAmt accEd dc amtEd =
-  let accText = edText accEd
-      nameHint = lookupAccountName masters accText
+  let nameHint = lookupAccountName masters (edText accEd)
   in B.hBox
        [ str (show idx <> ". 科目: ")
        , renderTextEd (cur == fAcc) accEd
-       , str " "
+       , withAttr hintAttr (str " [Sp] ")
        , withAttr hintAttr (txt (fromMaybe "　　　　　　　　" nameHint))
        , str "  "
        , drawCycleField (cur == fDC) (showDrCr dc)
@@ -176,23 +188,117 @@ drawButtons jf =
     , drawBtn (jfFocus jf == FFCancel) " キャンセル "
     ]
 
+-- ── Modal ─────────────────────────────────────────────────────────────────────
+
+drawJournalModal :: ModalState -> Widget Name
+drawJournalModal ms =
+  BC.centerLayer $
+    B.hLimit 62 $
+      B.vLimit 22 $
+        B.withBorderStyle BBS.unicodeRounded $
+          BB.borderWithLabel (withAttr titleAttr (str (modalTitle (msKind ms)))) $
+            B.padAll 1 $
+              B.vBox
+                [ if null (msItems ms)
+                    then withAttr hintAttr (BC.hCenter (str "登録データなし"))
+                    else B.vBox (zipWith (drawModalItem (msSelected ms)) [0 ..] (msItems ms))
+                , BB.hBorder
+                , withAttr hintAttr (str "↑/↓:移動  Enter:確定  Esc:閉じる")
+                ]
+
+modalTitle :: ModalKind -> String
+modalTitle ModalOrg = " 入力部門を選択 "
+modalTitle ModalAccount = " 勘定科目を選択 "
+
+drawModalItem :: Int -> Int -> (Text, Text) -> Widget Name
+drawModalItem selected idx (code, label) =
+  let w = B.hBox [str " ", B.hLimit 14 (txt code), str "  ", txt label]
+  in if idx == selected then withAttr focusedAttr w else w
+
 -- ── Event handling ────────────────────────────────────────────────────────────
 
-handleFormEv :: BrickEvent Name () -> JournalFormState -> AppState -> EventM Name AppState ()
-handleFormEv (VtyEvent (Vty.EvKey Vty.KEsc [])) _ st =
+handleFormEv :: BrickEvent Name AppEvent -> JournalFormState -> AppState -> EventM Name AppState ()
+handleFormEv ev jf st = case jfModal jf of
+  Just ms -> handleModalEv ev ms jf st
+  Nothing -> handleFormEvNormal ev jf st
+
+handleFormEvNormal ::
+  BrickEvent Name AppEvent -> JournalFormState -> AppState -> EventM Name AppState ()
+handleFormEvNormal (VtyEvent (Vty.EvKey Vty.KEsc [])) _ st =
   B.put st{appScreen = ScreenMenu}
-handleFormEv (VtyEvent (Vty.EvKey (Vty.KChar '\t') [])) jf st =
+handleFormEvNormal (VtyEvent (Vty.EvKey (Vty.KChar '\t') [])) jf st =
   B.put st{appScreen = ScreenJournalForm jf{jfFocus = nextJFocus (jfVKind jf) (jfFocus jf)}}
-handleFormEv (VtyEvent (Vty.EvKey Vty.KBackTab [])) jf st =
+handleFormEvNormal (VtyEvent (Vty.EvKey Vty.KBackTab [])) jf st =
   B.put st{appScreen = ScreenJournalForm jf{jfFocus = prevJFocus (jfVKind jf) (jfFocus jf)}}
-handleFormEv ev jf st = handleFocusedField ev jf st
+handleFormEvNormal ev jf st = handleFocusedField ev jf st
+
+-- | モーダルが開いているときのキー処理（他のすべてのキーを飲み込む）
+handleModalEv ::
+  BrickEvent Name AppEvent -> ModalState -> JournalFormState -> AppState -> EventM Name AppState ()
+handleModalEv (VtyEvent (Vty.EvKey Vty.KEsc [])) _ jf st =
+  B.put st{appScreen = ScreenJournalForm jf{jfModal = Nothing}}
+handleModalEv (VtyEvent (Vty.EvKey Vty.KUp [])) ms jf st =
+  B.put
+    st{appScreen = ScreenJournalForm jf{jfModal = Just ms{msSelected = max 0 (msSelected ms - 1)}}}
+handleModalEv (VtyEvent (Vty.EvKey Vty.KDown [])) ms jf st =
+  let lastIdx = max 0 (length (msItems ms) - 1)
+  in B.put
+       st
+         { appScreen =
+             ScreenJournalForm jf{jfModal = Just ms{msSelected = min lastIdx (msSelected ms + 1)}}
+         }
+handleModalEv (VtyEvent (Vty.EvKey Vty.KEnter [])) ms jf st =
+  case drop (msSelected ms) (msItems ms) of
+    [] -> B.put st{appScreen = ScreenJournalForm jf{jfModal = Nothing}}
+    ((code, _) : _) ->
+      B.put st{appScreen = ScreenJournalForm (applyModalSelection ms code jf){jfModal = Nothing}}
+handleModalEv _ _ _ _ = pure ()
+
+applyModalSelection :: ModalState -> Text -> JournalFormState -> JournalFormState
+applyModalSelection ms code jf = case msTarget ms of
+  FFOrg -> jf{jfOrg = E.editor (NJournal JNOrg) (Just 1) code}
+  FFL1Account -> jf{jfL1Acc = E.editor (NJournal JNL1Account) (Just 1) code}
+  FFL2Account -> jf{jfL2Acc = E.editor (NJournal JNL2Account) (Just 1) code}
+  _ -> jf
+
+-- | マスタ参照フィールドの Space でモーダルを構築して開く
+buildModal :: ModalKind -> FormFocus -> MasterBook -> ModalState
+buildModal ModalOrg target mb =
+  ModalState
+    { msKind = ModalOrg
+    , msTarget = target
+    , msItems =
+        [ (unOrgId (orgId org), orgName org)
+        | org <- Map.elems (masterOrgs mb)
+        , orgActive org
+        ]
+    , msSelected = 0
+    }
+buildModal ModalAccount target mb =
+  ModalState
+    { msKind = ModalAccount
+    , msTarget = target
+    , msItems =
+        [ (unAccountCode (amCode am), amName am <> "  " <> showAccountCategory (amCategory am))
+        | am <- Map.elems (masterAccounts mb)
+        , amActive am
+        ]
+    , msSelected = 0
+    }
 
 handleFocusedField ::
-  BrickEvent Name () -> JournalFormState -> AppState -> EventM Name AppState ()
+  BrickEvent Name AppEvent -> JournalFormState -> AppState -> EventM Name AppState ()
 handleFocusedField ev jf st = case jfFocus jf of
-  FFOrg -> do
-    (newEd, ()) <- B.nestEventM (jfOrg jf) (E.handleEditorEvent ev)
-    B.put st{appScreen = ScreenJournalForm jf{jfOrg = newEd}}
+  FFOrg -> case ev of
+    VtyEvent (Vty.EvKey (Vty.KChar ' ') []) ->
+      B.put
+        st
+          { appScreen =
+              ScreenJournalForm jf{jfModal = Just (buildModal ModalOrg FFOrg (appMasters st))}
+          }
+    _ -> do
+      (newEd, ()) <- B.nestEventM (jfOrg jf) (E.handleEditorEvent ev)
+      B.put st{appScreen = ScreenJournalForm jf{jfOrg = newEd}}
   FFDate -> do
     (newEd, ()) <- B.nestEventM (jfDate jf) (E.handleEditorEvent ev)
     B.put st{appScreen = ScreenJournalForm jf{jfDate = newEd}}
@@ -202,15 +308,31 @@ handleFocusedField ev jf st = case jfFocus jf of
   FFMemo -> do
     (newEd, ()) <- B.nestEventM (jfMemo jf) (E.handleEditorEvent ev)
     B.put st{appScreen = ScreenJournalForm jf{jfMemo = newEd}}
-  FFL1Account -> do
-    (newEd, ()) <- B.nestEventM (jfL1Acc jf) (E.handleEditorEvent ev)
-    B.put st{appScreen = ScreenJournalForm jf{jfL1Acc = newEd}}
+  FFL1Account -> case ev of
+    VtyEvent (Vty.EvKey (Vty.KChar ' ') []) ->
+      B.put
+        st
+          { appScreen =
+              ScreenJournalForm
+                jf{jfModal = Just (buildModal ModalAccount FFL1Account (appMasters st))}
+          }
+    _ -> do
+      (newEd, ()) <- B.nestEventM (jfL1Acc jf) (E.handleEditorEvent ev)
+      B.put st{appScreen = ScreenJournalForm jf{jfL1Acc = newEd}}
   FFL1Amount -> do
     (newEd, ()) <- B.nestEventM (jfL1Amt jf) (E.handleEditorEvent ev)
     B.put st{appScreen = ScreenJournalForm jf{jfL1Amt = newEd}}
-  FFL2Account -> do
-    (newEd, ()) <- B.nestEventM (jfL2Acc jf) (E.handleEditorEvent ev)
-    B.put st{appScreen = ScreenJournalForm jf{jfL2Acc = newEd}}
+  FFL2Account -> case ev of
+    VtyEvent (Vty.EvKey (Vty.KChar ' ') []) ->
+      B.put
+        st
+          { appScreen =
+              ScreenJournalForm
+                jf{jfModal = Just (buildModal ModalAccount FFL2Account (appMasters st))}
+          }
+    _ -> do
+      (newEd, ()) <- B.nestEventM (jfL2Acc jf) (E.handleEditorEvent ev)
+      B.put st{appScreen = ScreenJournalForm jf{jfL2Acc = newEd}}
   FFL2Amount -> do
     (newEd, ()) <- B.nestEventM (jfL2Amt jf) (E.handleEditorEvent ev)
     B.put st{appScreen = ScreenJournalForm jf{jfL2Amt = newEd}}
@@ -228,7 +350,11 @@ handleFocusedField ev jf st = case jfFocus jf of
 
 handleCycle ::
   (Bounded a, Enum a, Eq a) =>
-  BrickEvent Name () -> (a -> JournalFormState) -> a -> AppState -> EventM Name AppState ()
+  BrickEvent Name AppEvent ->
+  (a -> JournalFormState) ->
+  a ->
+  AppState ->
+  EventM Name AppState ()
 handleCycle (VtyEvent (Vty.EvKey Vty.KLeft [])) mk v st =
   B.put st{appScreen = ScreenJournalForm (mk (cycleL v))}
 handleCycle (VtyEvent (Vty.EvKey Vty.KRight [])) mk v st =
@@ -239,10 +365,8 @@ handleCycle _ _ _ _ = pure ()
 
 handleSubmit :: JournalFormState -> AppState -> EventM Name AppState ()
 handleSubmit jf st = do
-  result <- liftIO (submitJournalEntry (appStore st) jf)
-  case result of
-    Right () -> B.put st{appScreen = ScreenMenu}
-    Left err -> B.put st{appScreen = ScreenJournalForm jf{jfError = Just err}}
+  liftIO $ dispatchJournalSubmit (appChan st) (appStore st) jf
+  B.put st{appScreen = ScreenJournalForm jf{jfLoading = True, jfError = Nothing}}
 
 -- ── Label helpers ─────────────────────────────────────────────────────────────
 

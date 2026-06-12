@@ -33,6 +33,8 @@ drawMenu =
               , str " "
               , BC.hCenter (str "[ 2 ]  マスタ管理")
               , str " "
+              , BC.hCenter (str "[ 3 ]  伝票検索")
+              , str " "
               , BC.hCenter (str "─────────────────────────────────────────")
               , str " "
               , withAttr hintAttr (BC.hCenter (str "[ q / Esc ] 終了"))
@@ -40,12 +42,14 @@ drawMenu =
  where
   withBorderStyle = B.withBorderStyle
 
-handleMenuEv :: BrickEvent Name () -> AppState -> EventM Name AppState ()
+handleMenuEv :: BrickEvent Name AppEvent -> AppState -> EventM Name AppState ()
 handleMenuEv (VtyEvent (Vty.EvKey (Vty.KChar '1') [])) st = do
   today <- liftIO (utctDay <$> getCurrentTime)
   B.put st{appScreen = ScreenJournalForm (initJournalForm today)}
 handleMenuEv (VtyEvent (Vty.EvKey (Vty.KChar '2') [])) st =
   B.put st{appScreen = ScreenMasterMenu}
+handleMenuEv (VtyEvent (Vty.EvKey (Vty.KChar '3') [])) st =
+  B.put st{appScreen = ScreenVoucherSearch initVoucherSearch}
 handleMenuEv (VtyEvent (Vty.EvKey (Vty.KChar 'q') [])) _ = B.halt
 handleMenuEv (VtyEvent (Vty.EvKey Vty.KEsc [])) _ = B.halt
 handleMenuEv _ _ = pure ()
