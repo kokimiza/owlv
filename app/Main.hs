@@ -1,4 +1,9 @@
-module Main where
+module Main (main) where
+
+import Shell.EventStore (newInMemoryEventStore)
+import Shell.TUI.App (runTUI)
 
 main :: IO ()
-main = putStrLn "Hello, Haskell!"
+main = do
+  store <- newInMemoryEventStore
+  runTUI store
