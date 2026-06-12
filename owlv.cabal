@@ -30,6 +30,11 @@ library
         Core.Domain.Money
         Core.Domain.AccountCode
         Core.Domain.Journal
+        Core.Domain.Organisation
+        Core.Domain.OrgPermission
+        Core.Domain.Partner
+        Core.Domain.AccountMaster
+        Core.Domain.SubAccount
         Core.Error
         Core.Command
         Core.Event
@@ -37,11 +42,21 @@ library
         Core.Decide
         Core.Evolve
         Shell.AppError
+        Shell.ErrorCatalog
         Shell.EventStore
         Shell.CommandExecutor
+        Shell.TUI.Attrs
+        Shell.TUI.Helpers
         Shell.TUI.Types
         Shell.TUI.Submit
         Shell.TUI.App
+        Shell.TUI.Screen.Menu
+        Shell.TUI.Screen.Journal
+        Shell.TUI.Screen.Master.Menu
+        Shell.TUI.Screen.Master.Organisation
+        Shell.TUI.Screen.Master.Partner
+        Shell.TUI.Screen.Master.AccountCode
+        Shell.TUI.Screen.Master.SubAccount
     build-depends:
         brick        >= 2.3,
         vty          >= 6.2,
@@ -65,6 +80,7 @@ test-suite owlv-test
     hs-source-dirs:   test
     other-modules:
         Core.JournalSpec
+        Core.MasterSpec
     build-depends:
         owlv,
         tasty            >= 1.4,

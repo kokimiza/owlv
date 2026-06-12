@@ -1,9 +1,10 @@
--- | EventStore abstraction.
---
--- Designed for a *local* PostgreSQL instance (same host as the app).
--- For now the only concrete implementation is in-memory (IORef).
--- The Postgres implementation is stubbed; it will be wired once the
--- local PG server is running — connect logic goes in newPostgresEventStore.
+{- | EventStore abstraction.
+
+Designed for a *local* PostgreSQL instance (same host as the app).
+For now the only concrete implementation is in-memory (IORef).
+The Postgres implementation is stubbed; it will be wired once the
+local PG server is running — connect logic goes in newPostgresEventStore.
+-}
 module Shell.EventStore
   ( EventStore (..)
   , newInMemoryEventStore
@@ -12,25 +13,29 @@ module Shell.EventStore
 
 import Control.Exception (SomeException, try)
 import Data.IORef
-import qualified Data.Text as T
+
+import Data.Text qualified as T
+
 import Core.Event (Event)
 import Shell.AppError (AppError (..))
 
--- | Interface for the append-only event store.
--- Both fields return IO (Either AppError _) — no exceptions escape.
+{- | Interface for the append-only event store.
+Both fields return IO (Either AppError _) — no exceptions escape.
+-}
 data EventStore = EventStore
-  { esLoad   :: IO (Either AppError [Event])
+  { esLoad :: IO (Either AppError [Event])
   , esAppend :: [Event] -> IO (Either AppError ())
   }
 
--- | In-memory implementation backed by IORef.
--- Suitable for tests and early development.
+{- | In-memory implementation backed by IORef.
+Suitable for tests and early development.
+-}
 newInMemoryEventStore :: IO EventStore
 newInMemoryEventStore = do
   ref <- newIORef []
   pure
     EventStore
-      { esLoad   = safeIO (readIORef ref)
+      { esLoad = safeIO (readIORef ref)
       , esAppend = \evts -> safeIO (modifyIORef' ref (<> evts))
       }
 
@@ -41,8 +46,8 @@ safeIO :: IO a -> IO (Either AppError a)
 safeIO action = do
   result <- try @SomeException action
   pure $ case result of
-    Left  ex -> Left (StorageError (T.pack (show ex)))
-    Right v  -> Right v
+    Left ex -> Left (AppStorageError (T.pack (show ex)))
+    Right v -> Right v
 
 -- ── PostgreSQL stub ─────────────────────────────────────────────────────────
 -- Future: connect to local PostgreSQL (not remote).

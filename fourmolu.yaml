@@ -1,0 +1,107 @@
+# fourmolu.yaml — owlv プロジェクト整形設定
+# fourmolu 0.19 / GHC 9.14.1 + GHC2024
+# 実行: fourmolu -i $(git ls-files '*.hs')
+#
+# ── import のソート（アルファベット順）について ──────────────────────────────
+# fourmolu は import の並び替えを行わない。
+# ソートは HLS の "Organize Imports" コードアクション、または
+#   stylish-haskell --config .stylish-haskell.yaml
+# を別途実行すること。
+# fourmolu が行うのはグループ分け・書式統一のみ。
+# ────────────────────────────────────────────────────────────────────────────
+
+# ── インデント ───────────────────────────────────────────────────────────────
+
+# 1 ステップのスペース数
+indentation: 2
+
+# 自動改行の目安（none = 制限なし）
+column-limit: 100
+
+# ── 構文スタイル ──────────────────────────────────────────────────────────────
+
+# 型シグネチャの (->) を行末に置く
+function-arrows: trailing
+
+# カンマを行頭に置く
+# レコード/リスト/import リストで先頭カンマは行ごとの差分が読みやすい
+comma-style: leading
+
+# import・export リストの書式
+# leading: ( を次行に置き、先頭カンマで並べる（既存コードスタイルと一致）
+# diff-friendly にすると ( がモジュール行末に移動するため使わない
+import-export-style: leading
+
+# ── import グループ分け ───────────────────────────────────────────────────────
+# by-scope-then-qualified:
+#   グループ 1: 外部ライブラリ・非 qualified
+#   グループ 2: 外部ライブラリ・qualified
+#   グループ 3: ローカルモジュール（本 cabal パッケージ）・非 qualified
+#   グループ 4: ローカルモジュール・qualified
+# ローカル判定は cabal ファイルから自動取得される。
+# アルファベット順ソートは行わないため、並び替えは別途手動または HLS で。
+import-grouping: by-scope-then-qualified
+
+# ── where / let / in ─────────────────────────────────────────────────────────
+
+# where 節のインデントを本体の半インデントにしない（false = 本体と同列）
+indent-wheres: false
+
+# let バインディングのスタイル（auto = 文脈に応じて最適化）
+let-style: auto
+
+# in キーワードの位置
+# no-space: let と同じ列に in を置き、直後に式（既存コードスタイルと一致）
+in-style: no-space
+
+# ── if 式 ────────────────────────────────────────────────────────────────────
+
+if-style: indented
+
+# ── レコード ─────────────────────────────────────────────────────────────────
+
+# レコード型の { の前にスペースを入れない
+record-brace-space: false
+
+# ── 宣言間の空行 ──────────────────────────────────────────────────────────────
+
+newlines-between-decls: 1
+
+# ── Haddock ──────────────────────────────────────────────────────────────────
+
+# Haddock コメントを複数行スタイルに統一
+haddock-style: multi-line
+
+# モジュールレベルの Haddock（null = haddock-style に従う）
+haddock-style-module: null
+
+# ── 型クラス制約・deriving ────────────────────────────────────────────────────
+
+# 単一制約の括弧を常に付ける（Eq a => ... → (Eq a) => ...）
+single-constraint-parens: always
+
+# 単一 deriving の括弧（deriving Eq → deriving (Eq)）
+single-deriving-parens: always
+
+# 制約・derived クラス・deriving 節をアルファベット順にソート
+sort-constraints: true
+sort-derived-classes: true
+sort-deriving-clauses: true
+
+# ── 演算子 ───────────────────────────────────────────────────────────────────
+
+# セクション演算子（$ など infixr 0）を行末に置く
+trailing-section-operators: true
+
+# ── Unicode ──────────────────────────────────────────────────────────────────
+
+# detect: ソースファイルの書き方に従う（λ や → が既にあれば保持）
+unicode: detect
+
+# ── その他 ───────────────────────────────────────────────────────────────────
+
+# 末尾改行の有無を保持する
+respectful: true
+
+# 演算子の結合性宣言（追加が必要な場合はここに列挙）
+fixities: []
