@@ -21,8 +21,9 @@ newtype BatchEnv = BatchEnv
   { batchStore :: EventStore
   }
 
--- | 本番バッチで使うエフェクトスタック。
--- テスト時はインメモリインタープリタに差し替えて runEff で走らせる。
+{- | 本番バッチで使うエフェクトスタック。
+テスト時はインメモリインタープリタに差し替えて runEff で走らせる。
+-}
 type BatchEffs =
   '[ EventStoreEff
    , ClockEff
@@ -35,8 +36,9 @@ type BatchEffs =
 loadBatchEnv :: IO (Either AppError BatchEnv)
 loadBatchEnv = fmap (fmap BatchEnv) newPostgresEventStore
 
--- | 本番インタープリタスタックでバッチジョブを走らせる。
--- UserCtx は "batch" 固定。PG バッチロール整備後は runUserCtxPg に切替。
+{- | 本番インタープリタスタックでバッチジョブを走らせる。
+UserCtx は "batch" 固定。PG バッチロール整備後は runUserCtxPg に切替。
+-}
 runBatch :: BatchEnv -> Eff BatchEffs a -> IO (Either AppError a)
 runBatch env action = do
   result <-
@@ -51,12 +53,13 @@ runBatch env action = do
     Left (_, err) -> Left err
     Right v -> Right v
 
--- | AppError を cron が判断できる終了コードに変換する。
--- 0 は成功専用。1–6 はエラー種別。99 は起動失敗（main で直接使用）。
+{- | AppError を cron が判断できる終了コードに変換する。
+0 は成功専用。1–6 はエラー種別。99 は起動失敗（main で直接使用）。
+-}
 errorToCode :: AppError -> Int
-errorToCode (AppDomainError _)      = 1
-errorToCode (AppInputError _)       = 2
-errorToCode (AppStorageError _)     = 3
-errorToCode (AppConnectionError _)  = 4
-errorToCode (AppNotFound _)         = 5
-errorToCode AppConcurrencyConflict  = 6
+errorToCode (AppDomainError _) = 1
+errorToCode (AppInputError _) = 2
+errorToCode (AppStorageError _) = 3
+errorToCode (AppConnectionError _) = 4
+errorToCode (AppNotFound _) = 5
+errorToCode AppConcurrencyConflict = 6
