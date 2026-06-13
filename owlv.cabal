@@ -94,6 +94,22 @@ executable owlv
         owlv
     default-language: GHC2024
 
+executable owlv-batch-center
+    import:           warnings, core-deps
+    main-is:          Main.hs
+    hs-source-dirs:   batch
+    ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+    other-modules:
+        Batch.Env
+        Batch.DailyClose
+        Batch.WalShip
+        Batch.VacuumCheck
+    build-depends:
+        owlv,
+        effectful            >= 2.3,
+        optparse-applicative >= 0.18
+    default-language: GHC2024
+
 test-suite owlv-test
     import:           warnings, core-deps
     type:             exitcode-stdio-1.0
