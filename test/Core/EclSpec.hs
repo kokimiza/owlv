@@ -1,12 +1,47 @@
 module Core.EclSpec (tests) where
 
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Time (Day (..))
 import Test.Tasty
 import Test.Tasty.HUnit
 import Test.Tasty.QuickCheck
 
+import Data.Map.Strict qualified as Map
+import Data.UUID qualified as UUID
+
+import Core.Command (Command (..))
+import Core.Decide (decide)
+import Core.Domain.AccountCode (mkAccountCode)
 import Core.Domain.Ecl
 import Core.Domain.Money (mkMoney, zeroMoney)
+import Core.Error (DomainError (..))
+import Core.Event (Event (..))
+import Core.Evolve (evolve)
+import Core.State (AppBook (..), EclBook (..), initialAppBook)
+
+-- ── Fixtures ──────────────────────────────────────────────────────────────
+
+testDay :: Day
+testDay = ModifiedJulianDay 59000
+
+testMeasId :: EclMeasurementId
+testMeasId = EclMeasurementId (UUID.fromWords 0 0 0 1)
+
+testMeas :: EclMeasurement
+testMeas =
+  EclMeasurement
+    { eclMeasId = testMeasId
+    , eclMeasDate = testDay
+    , eclMeasApproach = SimplifiedApproach
+    , eclMeasStage = Nothing
+    , eclMeasAccount = case mkAccountCode "1100" of Right a -> a; Left _ -> error "unreachable"
+    , eclMeasEntryRef = Nothing
+    , eclMeasParams = Nothing
+    , eclMeasMatrix = Nothing
+    , eclMeasAmount = mkMoney 5_000
+    , eclMeasInterestBasis = GrossCarryingAmount
+    , eclMeasMemo = ""
+    }
 
 -- ── Tests ─────────────────────────────────────────────────────────────────
 
@@ -16,6 +51,8 @@ tests =
     "Core.Ecl"
     [ testGroup "computeEcl" eclCalcTests
     , testGroup "computeProvisionMatrixEcl" matrixTests
+    , testGroup "decide.RecordEclMeasurement" eclDecideTests
+    , testGroup "evolve.EclBook" eclEvolveTests
     ]
 
 -- ── computeEcl (§4.7.9.1) ─────────────────────────────────────────────────
@@ -101,4 +138,41 @@ matrixTests =
                 (mkMoney (fromIntegral (exposure `mod` 10_000_000)))
             matrix = ProvisionMatrix (bucket :| [])
         in computeProvisionMatrixEcl matrix >= zeroMoney
+  ]
+
+-- ── decide.RecordEclMeasurement (§4.7.12) ────────────────────────────────
+
+eclDecideTests :: [TestTree]
+eclDecideTests =
+  [ testCase "正常な ECL 測定を受理する" $
+      decide initialAppBook (RecordEclMeasurement testMeas)
+        @?= Right [EclMeasurementRecorded testMeas]
+  , testCase "重複IDは DuplicateEclMeasurement" $ do
+      let book = evolve initialAppBook (EclMeasurementRecorded testMeas)
+      case decide book (RecordEclMeasurement testMeas) of
+        Left (DuplicateEclMeasurement _) -> pure ()
+        other -> assertFailure ("expected DuplicateEclMeasurement, got: " <> show other)
+  , testCase "負の ECL 額は NegativeEclAmount" $ do
+      let m = testMeas{eclMeasAmount = mkMoney (-1)}
+      case decide initialAppBook (RecordEclMeasurement m) of
+        Left (NegativeEclAmount _ _) -> pure ()
+        other -> assertFailure ("expected NegativeEclAmount, got: " <> show other)
+  , testCase "ゼロ ECL 額は受理する（簡便法で ECL=0 は正常）" $ do
+      let m = testMeas{eclMeasId = EclMeasurementId (UUID.fromWords 0 0 0 2), eclMeasAmount = zeroMoney}
+      case decide initialAppBook (RecordEclMeasurement m) of
+        Right [EclMeasurementRecorded _] -> pure ()
+        other -> assertFailure ("expected success, got: " <> show other)
+  ]
+
+-- ── evolve.EclBook ────────────────────────────────────────────────────────
+
+eclEvolveTests :: [TestTree]
+eclEvolveTests =
+  [ testCase "EclMeasurementRecorded: EclBook に登録される" $ do
+      let book = evolve initialAppBook (EclMeasurementRecorded testMeas)
+      assertBool "meas present" (Map.member testMeasId (eclMeasurements (appEcl book)))
+  , testCase "EclMeasurementRecorded: 2件登録でサイズ 2" $ do
+      let m2 = testMeas{eclMeasId = EclMeasurementId (UUID.fromWords 0 0 0 2)}
+          book = foldl' evolve initialAppBook [EclMeasurementRecorded testMeas, EclMeasurementRecorded m2]
+      Map.size (eclMeasurements (appEcl book)) @?= 2
   ]

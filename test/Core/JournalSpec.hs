@@ -27,6 +27,7 @@ import Core.Domain.Journal
   , VoucherRef (..)
   )
 import Core.Domain.Money (Money, mkMoney)
+import Core.Domain.OrgPermission (PermScope (..))
 import Core.Domain.Organisation (Organisation (..), OrganisationId (..))
 import Core.Error (DomainError (..))
 import Core.Event (Event (..))
@@ -90,11 +91,9 @@ genRefText = T.pack <$> vectorOf 8 (elements (['a' .. 'z'] ++ ['0' .. '9']))
 
 -- ── Test fixtures ──────────────────────────────────────────────────────────
 
--- | 事前登録済み組織 ID（テスト専用）
 testOrgId :: OrganisationId
 testOrgId = OrganisationId "TEST"
 
--- | testOrgId が登録された AppBook（RecordJournalEntry の checkOrgExists を通過させるため）
 testBook :: AppBook
 testBook = evolve initialAppBook (OrganisationRegistered org)
  where
@@ -150,12 +149,12 @@ tests =
 
 decideTests :: [TestTree]
 decideTests =
-  [ testProperty "balanced entry is accepted" $
+  [ testProperty "貸借一致の仕訳は受理される" $
       \(BalancedEntry e) ->
         case decide testBook (RecordJournalEntry e) of
           Right [JournalEntryRecorded _] -> True
           _ -> False
-  , testProperty "unbalanced entry is rejected" $
+  , testProperty "貸借不一致は UnbalancedEntry" $
       \dr cr ->
         dr /= (cr :: Money) ==>
           let ac = case mkAccountCode "1010" of Right a -> a; Left _ -> error "unreachable"
@@ -166,21 +165,28 @@ decideTests =
           in case decide testBook (RecordJournalEntry entry) of
                Left (UnbalancedEntry _ _) -> True
                _ -> False
-  , testProperty "correction without prior ref is rejected" $
-      \(BalancedEntry e) ->
-        let corrEntry = e{entryActionType = Cancellation, entryPriorRef = Nothing}
-        in case decide testBook (RecordJournalEntry corrEntry) of
-             Left (CorrectionMissingPriorRef Cancellation) -> True
-             _ -> False
-  , testCase "pending voucher without memo is rejected" $ do
+  , testProperty "すべての訂正区分は先行参照なしで CorrectionMissingPriorRef" $
+      \(BalancedEntry e) act ->
+        act /= NewEntry ==>
+          let corrEntry = e{entryActionType = act, entryPriorRef = Nothing}
+          in case decide testBook (RecordJournalEntry corrEntry) of
+               Left (CorrectionMissingPriorRef _) -> True
+               _ -> False
+  , testCase "証憑未着・摘要なしは PendingVoucherMissingMemo" $ do
       let eid = JournalEntryId (UUID.fromWords 0 0 0 2)
           day = ModifiedJulianDay 59001
           ac = case mkAccountCode "2010" of Right a -> a; Left _ -> error "unreachable"
           ls = JournalLine ac Debit (mkMoney 500) Nothing :| [JournalLine ac Credit (mkMoney 500) Nothing]
           entry = JournalEntry eid testOrgId day NewEntry Low VoucherPending Nothing "" ls
-      decide testBook (RecordJournalEntry entry)
-        @?= Left PendingVoucherMissingMemo
-  , testCase "duplicate entry ID is rejected" $ do
+      decide testBook (RecordJournalEntry entry) @?= Left PendingVoucherMissingMemo
+  , testCase "証憑未着・摘要ありは受理する" $ do
+      let eid = JournalEntryId (UUID.fromWords 0 0 0 3)
+          day = ModifiedJulianDay 59002
+          ac = case mkAccountCode "1010" of Right a -> a; Left _ -> error "unreachable"
+          ls = JournalLine ac Debit (mkMoney 500) Nothing :| [JournalLine ac Credit (mkMoney 500) Nothing]
+          entry = JournalEntry eid testOrgId day NewEntry Low VoucherPending Nothing "証憑到着予定：翌月末" ls
+      decide testBook (RecordJournalEntry entry) @?= Right [JournalEntryRecorded entry]
+  , testCase "重複伝票IDは DuplicateEntryId" $ do
       let e1 =
             balancedEntry (JournalEntryId (UUID.fromWords 1 1 1 1)) (ModifiedJulianDay 59002) NewEntry Nothing
           book = foldl' evolve testBook [JournalEntryRecorded e1]
@@ -188,8 +194,8 @@ decideTests =
       case decide book (RecordJournalEntry e2) of
         Left (DuplicateEntryId _) -> pure ()
         other -> assertFailure ("expected DuplicateEntryId, got: " <> show other)
-  , testCase "unknown org is rejected" $ do
-      let eid = JournalEntryId (UUID.fromWords 0 0 0 3)
+  , testCase "未登録組織は OrgNotFound" $ do
+      let eid = JournalEntryId (UUID.fromWords 0 0 0 4)
           day = ModifiedJulianDay 59003
           ac = case mkAccountCode "1010" of Right a -> a; Left _ -> error "unreachable"
           ls = JournalLine ac Debit (mkMoney 100) Nothing :| [JournalLine ac Credit (mkMoney 100) Nothing]
@@ -197,21 +203,61 @@ decideTests =
       case decide testBook (RecordJournalEntry entry) of
         Left (OrgNotFound _) -> pure ()
         other -> assertFailure ("expected OrgNotFound, got: " <> show other)
+  , testCase "権限ホワイトリスト: 未付与科目は OrgPermissionDenied" $ do
+      -- testOrgId に ac1 のみを付与 → ac2 を使う仕訳は拒否される
+      let ac1 = case mkAccountCode "1010" of Right a -> a; Left _ -> error "unreachable"
+          ac2 = case mkAccountCode "2010" of Right a -> a; Left _ -> error "unreachable"
+          permBook = evolve testBook (OrgPermissionGranted testOrgId (AccountScope ac1))
+          eid = JournalEntryId (UUID.fromWords 0 0 0 5)
+          ls = JournalLine ac2 Debit (mkMoney 100) Nothing :| [JournalLine ac2 Credit (mkMoney 100) Nothing]
+          entry =
+            JournalEntry
+              eid
+              testOrgId
+              (ModifiedJulianDay 59004)
+              NewEntry
+              Low
+              (VoucherAttached "X")
+              Nothing
+              ""
+              ls
+      case decide permBook (RecordJournalEntry entry) of
+        Left (OrgPermissionDenied _ _) -> pure ()
+        other -> assertFailure ("expected OrgPermissionDenied, got: " <> show other)
+  , testCase "権限ホワイトリスト: 付与済み科目は許可される" $ do
+      let ac1 = case mkAccountCode "1010" of Right a -> a; Left _ -> error "unreachable"
+          permBook = evolve testBook (OrgPermissionGranted testOrgId (AccountScope ac1))
+          eid = JournalEntryId (UUID.fromWords 0 0 0 6)
+          ls = JournalLine ac1 Debit (mkMoney 100) Nothing :| [JournalLine ac1 Credit (mkMoney 100) Nothing]
+          entry =
+            JournalEntry
+              eid
+              testOrgId
+              (ModifiedJulianDay 59005)
+              NewEntry
+              Low
+              (VoucherAttached "X")
+              Nothing
+              ""
+              ls
+      case decide permBook (RecordJournalEntry entry) of
+        Right [JournalEntryRecorded _] -> pure ()
+        other -> assertFailure ("expected success, got: " <> show other)
   ]
 
 evolveTests :: [TestTree]
 evolveTests =
-  [ testProperty "evolve inserts entry into book" $
+  [ testProperty "evolve: 仕訳が JournalBook に挿入される" $
       \(BalancedEntry e) ->
         let book = evolve testBook (JournalEntryRecorded e)
         in Map.member (entryId e) (journalEntries (appJournals book))
-  , testProperty "fold determinism: same events yield same state" $
+  , testProperty "フォールド決定論: 同一イベント列 → 同一状態" $
       \evts ->
         let evts' = map toEvent evts
             book1 = foldl' evolve testBook evts'
             book2 = foldl' evolve testBook evts'
         in book1 == book2
-  , testProperty "n unique entries → book size equals n" $
+  , testProperty "n 件の一意仕訳 → 台帳サイズが n" $
       \(BalancedEntry e1) (BalancedEntry e2) ->
         entryId e1 /= entryId e2 ==>
           let events = [JournalEntryRecorded e1, JournalEntryRecorded e2]
