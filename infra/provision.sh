@@ -1,5 +1,5 @@
 #!/bin/sh
-# provision.sh — owlv ベアメタルリストア完全自動化
+# provision.sh — owlv ベアメタルリストア
 #
 # ━━━ 【事前準備】OpenBSD 手動インストール直後にやること ━━━━━━━━━━━━━━━━
 #
