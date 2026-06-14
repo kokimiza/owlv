@@ -54,19 +54,19 @@
 #    macOS Sequoia 以降は rsync が openrsync に置き換わっており、OpenBSD 側の
 #    openrsync と --delete 系フラグの互換性がない。scp -r を使うこと。
 #
-#   # (1) 古い残骸をリモートから削除 (再実行時にネストするのを防ぐ)
-#   ssh <YOUR_USERNAME>@192.168.50.200 'rm -rf /tmp/infra'
-#
-#   # (2) infra ディレクトリごと /tmp/ に転送 → /tmp/infra/ になる
+#   # (1) infra ディレクトリごと /tmp/ に転送 → /tmp/infra/ になる
 #   scp -r infra <YOUR_USERNAME>@192.168.50.200:/tmp/
 #
-#   # (3) リモートで配置・プロビジョニング実行 (コマンドは '' で囲んでリモートで実行)
-#   ssh <YOUR_USERNAME>@192.168.50.200 \
-#       'doas install -d /etc/owl && doas mv /tmp/infra /etc/owl/infra && doas sh /etc/owl/infra/provision.sh'
+#   # (2) SSH ログイン後、/etc/owl/ に配置して実行
+#   ssh <YOUR_USERNAME>@192.168.50.200
+#   doas rm -rf /etc/owl/ && doas mv /tmp/infra/ /etc/owl/
+#   doas sh /etc/owl/provision.sh
+#
+#   ※ 再実行時は同じ手順。/etc/owl/ ごと上書きするので古い残骸は自動的に消える。
 #
 # ━━━ 【Yubikey が届いたら】━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #
-#   ssh <YOUR_USERNAME>@<HOST_IP> 'doas sh /etc/owl/infra/host/yubikey-setup.sh'
+#   ssh <YOUR_USERNAME>@<HOST_IP> 'doas sh /etc/owl/host/yubikey-setup.sh'
 #
 # この時点では SSH を維持する。
 # Yubikey セットアップ完了まで管理者がロックアウトされないようにするため。
@@ -199,38 +199,18 @@ pkg_add age rclone 2>/dev/null && _ok "age / rclone インストール" || \
 
 # vmm-bios (SeaBIOS) — /etc/firmware/vmm-bios が無いと vmctl start が
 # "Cannot allocate memory" という誤った errno に化けて失敗する。
-# このファイルは firmware.openbsd.org (fw_update) では配布されていない。
-# base install set (base79.tgz 等) に含まれるファイル。
-# ベアメタル新規インストール直後など何らかの理由で欠落している場合は
-# OBD_MIRROR から HTTP で取得して vmm-bios のみ展開する。
-# HTTPS ではなく HTTP を使うのは TLS 証明書 SAN 欠落の回避のため。
+# 正規の取得方法: fw_update vmm (ドライバ名。vmm-firmware パッケージをインストール)
+# etc79.tgz は OpenBSD 7.9 amd64 の配布物に存在しない (SHA256 に記載なし)。
 if [ -f /etc/firmware/vmm-bios ]; then
     _ok "vmm-bios 既存 → スキップ"
 else
-    _log "/etc/firmware/vmm-bios が見つかりません — base install set から取得します..."
-    _rel_nn=$(printf '%s' "${OWL_RELEASE}" | tr -d '.')   # "7.9" → "79"
-    _base_url="http://${OBD_MIRROR}/pub/OpenBSD/${OWL_RELEASE}/amd64/base${_rel_nn}.tgz"
-    echo ""
-    echo "  ⚠  WARNING: vmm-bios 未取得のため所要時間が大幅に増加します"
-    echo "     理由: vmm-bios は base${_rel_nn}.tgz (約 200MB) に含まれており、"
-    echo "           fw_update ではなくインストールセット全体のダウンロードが必要です。"
-    echo "           ダウンロードだけで 30 分以上かかる場合があります。"
-    echo "     見込み: base${_rel_nn}.tgz 取得 (~30 分) + 4 VM インストール (~15 分) = 計 45 分以上"
-    echo "     次回以降: /etc/firmware/vmm-bios が存在すればこのステップはスキップされます。"
-    echo ""
-    _log "  取得元: ${_base_url}"
-    if ftp -o /tmp/base-vmm.tgz "${_base_url}"; then
-        tar -xzpf /tmp/base-vmm.tgz -C / './etc/firmware/vmm-bios' 2>/dev/null || \
-        tar -xzpf /tmp/base-vmm.tgz -C /  'etc/firmware/vmm-bios'  2>/dev/null || \
-            _die "vmm-bios の展開失敗 (base${_rel_nn}.tgz 内に存在しない可能性)"
-        rm -f /tmp/base-vmm.tgz
+    _log "/etc/firmware/vmm-bios が見つかりません — fw_update vmm で取得します..."
+    if fw_update vmm; then
+        _ok "fw_update vmm 完了 (vmm-firmware インストール済み)"
     else
-        rm -f /tmp/base-vmm.tgz
-        _die "/etc/firmware/vmm-bios 取得失敗\n  確認: ftp http://${OBD_MIRROR}/pub/OpenBSD/${OWL_RELEASE}/amd64/base${_rel_nn}.tgz"
+        _die "fw_update vmm 失敗 — ネットワーク疎通と firmware.openbsd.org へのアクセスを確認してください"
     fi
-    [ -f /etc/firmware/vmm-bios ] || _die "展開後も /etc/firmware/vmm-bios が見つかりません"
-    chmod 644 /etc/firmware/vmm-bios
-    _ok "vmm-bios を base${_rel_nn}.tgz から取得・展開"
+    [ -f /etc/firmware/vmm-bios ] || _die "fw_update 後も /etc/firmware/vmm-bios が見つかりません"
 fi
 
 # ── bridge 設定 ──────────────────────────────────────────────
@@ -497,7 +477,7 @@ _ok "DHCP / HTTP サーバー起動"
 _step 5 "VM OS autoinstall"
 _log "ホストメモリ:"
 _log "  物理:   $(sysctl -n hw.physmem | awk '{printf "%d MB", $1/1024/1024}')"
-_log "  実空き: $(sysctl vm.uvmexp 2>/dev/null | awk -F= '/\.free=/{f=$2}/\.pagesize=/{p=$2}END{if(f>0&&p>0)printf "%d MB",f*p/1024/1024;else print "不明"}')"
+_log "  実空き: $(vmstat 2>/dev/null | awk 'END{print $4}' || echo '不明')"
 _log "VMM 状態:"
 dmesg | grep -Ei 'vmm|vmx|svm|ept|rvi' | while read -r l; do _log "  dmesg: $l"; done
 vmctl status 2>/dev/null | while read -r l; do _log "  vmctl: $l"; done
@@ -546,6 +526,11 @@ EOF
     #          インストール完了後に通常起動すれば vm.conf の値が使われる。
     local bsdrd="/var/vmm/bsd.rd-${OWL_RELEASE}"
     local inst_mem="512M"
+    # 途中で切れた bsd.rd を検出して再取得する (10MB 未満は破損扱い)
+    if [ -f "$bsdrd" ] && [ "$(wc -c < "$bsdrd" | tr -d ' ')" -lt 10000000 ]; then
+        _log "[${vmname}] bsd.rd 破損検出 ($(du -h "$bsdrd" | cut -f1)) → 削除して再取得"
+        rm -f "$bsdrd"
+    fi
     if [ ! -f "$bsdrd" ]; then
         _log "[${vmname}] bsd.rd-${OWL_RELEASE} を取得中..."
         _info "    bsd.rd を取得中..."
@@ -554,7 +539,7 @@ EOF
             || _die "bsd.rd の取得に失敗しました"
         _log "[${vmname}] bsd.rd 取得完了: $(du -h "$bsdrd" | cut -f1)"
     else
-        _log "[${vmname}] bsd.rd-${OWL_RELEASE} 既存 → 再利用"
+        _log "[${vmname}] bsd.rd-${OWL_RELEASE} 既存 ($(du -h "$bsdrd" | cut -f1)) → 再利用"
     fi
 
     # running/starting の場合のみ停止する。
@@ -570,7 +555,18 @@ EOF
         _log "[${vmname}] 停止後の状態: $(vmctl status 2>/dev/null | awk -v n="$vmname" '$NF==n{print $(NF-1)}')"
     fi
 
-    _log "実空きメモリ: $(sysctl vm.uvmexp 2>/dev/null | awk -F= '/\.free=/{f=$2}/\.pagesize=/{p=$2}END{if(f>0&&p>0)printf "%d MB",f*p/1024/1024;else print "不明"}')"
+    _log "実空きメモリ: $(vmstat 2>/dev/null | awk 'END{print $4}' || echo '不明')"
+
+    # vmm-bios 読み取り可能か確認 (欠落または権限不足だと "failed to receive boot fd" で失敗)
+    [ -r /etc/firmware/vmm-bios ] || _die "vmm-bios が読み取れません — 'fw_update vmm' を実行してください"
+
+    # vmd が確実に応答できる状態か確認 (VM 間での vmd クラッシュ対策)
+    _vmd_chk=0
+    while ! vmctl status >/dev/null 2>&1; do
+        sleep 1; _vmd_chk=$((_vmd_chk + 1))
+        [ "$_vmd_chk" -lt 10 ] || _die "[${vmname}] vmctl start 前に vmd が応答しません"
+    done
+
     # 最小 vm.conf で起動した vmd には VM 定義がないため、-d/-i/-n で
     # 全パラメータを明示して新規インスタンスとして起動する。
     _log "[${vmname}] vmctl start -b $bsdrd -m ${inst_mem} -d ${disk} -i 1 -n ${swname} $vmname"
@@ -609,11 +605,9 @@ _wait_ssh() {
     _die "${ip} への SSH がタイムアウト (10 分)"
 }
 
-# vm.conf (VM 定義込み) を読み込んだ vmd では stopped エントリに対して
-# vmctl start -b を呼ぶと EALREADY になる。
-# vmctl reset vms はスイッチ定義も消去する (OpenBSD 7.9 で確認)。
-# 最小 vm.conf (スイッチのみ) で vmd を再起動することで
-# VM エントリなし・スイッチ定義ありのクリーンな状態を作る。
+# STEP3 の vmctl reload で VM が起動済みの場合、vmd を rcctl restart すると
+# VM プロセスが死ぬ前に新 vmd が立ち上がり vmm(4) リソースが競合する。
+# 正しい手順: ① 実行中 VM を個別停止 → ② vmd 完全終了を確認 → ③ 起動。
 _log "インストール用に最小 vm.conf (スイッチのみ) を適用し vmd を再起動..."
 cat > /etc/vm.conf <<'VMDEOF'
 switch "internal_lan" {
@@ -623,8 +617,60 @@ switch "dev_lan" {
     interface bridge1
 }
 VMDEOF
-rcctl restart vmd
-sleep 2
+
+# ① 実行中 VM を先に停止 (vmm(4) リソースを開放させてから vmd を止める)
+_running_vms=$(vmctl status 2>/dev/null | awk 'NR>1{print $NF}' | tr '\n' ' ')
+if [ -n "${_running_vms}" ]; then
+    _log "実行中 VM を停止: ${_running_vms}"
+    for _vm in ${_running_vms}; do
+        vmctl stop -f "${_vm}" 2>/dev/null || true
+    done
+    _log "VM 停止完了を 6 秒待機..."
+    sleep 6
+fi
+
+# ② vmd を停止し、すべての vmd プロセスが消えるまで待つ
+_log "vmd を停止..."
+rcctl stop vmd 2>/dev/null || true
+_n=0
+while pgrep -x vmd >/dev/null 2>&1; do
+    sleep 1; _n=$((_n + 1))
+    [ "$_n" -lt 20 ] || { _log "警告: vmd プロセスが残存 — 強制継続"; break; }
+done
+_log "vmd 完全停止 (${_n}秒待機)"
+
+# vmd が残した veb インターフェースをクリーンアップ。
+# STEP 3 の vmctl reload で vmd が veb を作成しており、停止後も残存すると
+# 再起動時に同名 veb の作成が競合して vmd が即クラッシュする。
+for _veb in $(ifconfig -l 2>/dev/null | tr ' ' '\n' | grep '^veb'); do
+    _log "残存 veb インターフェースを削除: ${_veb}"
+    ifconfig "${_veb}" destroy 2>/dev/null || true
+done
+
+# ③ 新しい vmd を起動し vmctl status が応答するまで待つ
+_log "vmd を起動..."
+rcctl start vmd
+sleep 2  # ソケット /var/run/vmd.sock 作成までの初期化を待つ
+if ! pgrep -x vmd >/dev/null 2>&1; then
+    _log "vmd が起動直後にクラッシュ — /var/log/messages (直近 vmd/vmm ログ):"
+    grep -Ei 'vmd|vmm' /var/log/messages | tail -20 | while read -r l; do _log "  $l"; done
+    _die "vmd の起動に失敗しました (プロセスが即終了)"
+fi
+_vmd_n=0
+while ! vmctl status >/dev/null 2>&1; do
+    sleep 1; _vmd_n=$((_vmd_n + 1))
+    if ! pgrep -x vmd >/dev/null 2>&1; then
+        _log "vmd プロセスが消滅 — /var/log/messages (直近 vmd/vmm ログ):"
+        grep -Ei 'vmd|vmm' /var/log/messages | tail -20 | while read -r l; do _log "  $l"; done
+        _die "vmd が起動中にクラッシュしました"
+    fi
+    [ "$_vmd_n" -lt 30 ] || {
+        _log "タイムアウト — /var/log/messages (直近 vmd/vmm ログ):"
+        grep -Ei 'vmd|vmm' /var/log/messages | tail -20 | while read -r l; do _log "  $l"; done
+        _die "vmd が 30 秒以内に応答しませんでした"
+    }
+done
+_log "vmd 準備完了 (${_vmd_n}秒待機)"
 _log "vmd PID: $(pgrep -x vmd | tr '\n' ' ' || echo '不明')"
 _log "インストール前 VM 一覧: $(vmctl status 2>/dev/null | awk 'NR>1{c++}END{print c+0}') 件"
 
