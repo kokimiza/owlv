@@ -1,0 +1,75 @@
+# owl-config.toml — プロビジョニング変数台帳
+# §4.3: GitOps によるインフラのコード化。provision.sh および各 setup.sh から参照する。
+# 本番認証情報は絶対に記載しない。秘密鍵・パスワードは手動投入する。
+
+[host]
+hostname        = "owlhost"
+openbsd_release = "7.7"       # Build VM / AP VM のリリースロックステップ (§1.3)
+wan_interface   = "em0"       # 外部インターフェース (通常は全遮断)
+
+[network.internal_lan]
+# vswitch0: AP VM ↔ DB VM (§1.1)
+subnet = "10.0.1.0/24"
+ap_vm  = "10.0.1.10"
+db_vm  = "10.0.1.20"
+
+[network.dev_lan]
+# vswitch1: Git VM ↔ Build VM (§1.1)
+subnet   = "10.0.2.0/24"
+git_vm   = "10.0.2.10"
+build_vm = "10.0.2.20"
+
+[vm.ap]
+name   = "vm-ap"
+memory = "512M"
+disk   = "/var/vmm/ap.img"
+size   = "20G"
+
+[vm.db]
+name   = "vm-db"
+memory = "1G"
+disk   = "/var/vmm/db.img"
+size   = "50G"
+
+[vm.git]
+name   = "vm-git"
+memory = "1G"
+disk   = "/var/vmm/git.img"
+size   = "50G"
+
+[vm.build]
+# GHC は多くのメモリを要求する (§3.1)
+name   = "vm-build"
+memory = "4G"
+disk   = "/var/vmm/build.img"
+size   = "50G"
+
+[toolchain]
+# ports 提供バージョンを正とする (§3.1)
+ghc_version   = "9.6"
+cabal_version = "3.10"
+owl_version   = ""   # デプロイ時に vX.Y.Z を設定
+
+[app]
+ssh_port       = 8022
+db_name        = "owl"
+db_app_user    = "owl_app"
+db_repl_user   = "owl_repl"
+pg_version     = "16"
+
+[install]
+# VM の OS インストール時に使う OpenBSD ミラー
+# provision.sh 実行時はまだ外向き通信が開いているので直接取得する
+openbsd_mirror = "cdn.openbsd.org"
+
+[dr]
+# §2.2: 時限開口型暗号化クラウド DR
+# ホストは受信者公開鍵のみ保持。秘密鍵はエスクロー管理 (§2.3)
+age_pubkey_file = "/etc/owl/age-recipient.pub"
+ramdisk_mount   = "/mnt/owl-dr"
+b2_remote       = "b2:owl-dr-backup"
+rsyncnet_remote = "rsyncnet:owl-dr-backup"
+window_seconds  = 300
+
+[forgejo]
+version = "7.0.4"

@@ -1,0 +1,17 @@
+# /etc/crontab — ホスト OS タスクスケジューラ
+# §2.2: 深夜 DR 射出。§2.1 L1: 週次ベースバックアップ。§5: 日次改ざん検知。
+
+SHELL=/bin/sh
+PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
+
+# 週次 ベースバックアップ (§2.1 L1) — 日曜 01:00
+0    1  *  *  0  owl-control  /usr/local/sbin/owl-control.sh basebackup >> /var/log/owl/basebackup.log 2>&1
+
+# 日次 DR 射出 (§2.2) — 深夜 02:00
+0    2  *  *  *  owl-control  /usr/local/sbin/owl-control.sh dr-export >> /var/log/owl/dr.log 2>&1
+
+# 日次 改ざん検知 (§5) — 02:30
+30   2  *  *  *  root         /usr/local/sbin/owl-integrity-check.sh >> /var/log/owl/integrity.log 2>&1
+
+# 月次 syspatch 確認 (§5) — 毎月 1 日 03:00
+0    3  1  *  *  root         syspatch -c >> /var/log/owl/syspatch.log 2>&1

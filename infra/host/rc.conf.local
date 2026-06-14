@@ -1,0 +1,14 @@
+# rc.conf.local — ホスト OpenBSD サービス設定
+# §5: 不要デーモンの全停止。OS 標準防御の全面活用。
+
+vmd_flags=""    # 仮想マシンデーモン
+pf=YES          # パケットフィルタ (無効化禁止)
+ntpd_flags="-s" # 起動時のみ時刻同期
+
+# SSH: 原則無効 (§5) — yubikey-setup.sh 完了後に無効化する
+sshd=NO
+
+httpd=NO
+ftpd=NO
+smtpd=NO
+sndiod=NO

@@ -1,0 +1,12 @@
+このディレクトリには DB VM の TLS 証明書を手動で配置してください。
+
+setup.sh は自己署名証明書を自動生成しますが、本番運用前に以下に差し替えてください:
+
+  vm-db:/var/postgresql/data/server.crt  — サーバー証明書 (内部 CA 発行)
+  vm-db:/var/postgresql/data/server.key  — 秘密鍵 (chmod 600 必須)
+
+CA 証明書は AP VM の /etc/owl/db-ca.crt に配置し、
+db.env の OWL_DB_SSLROOTCERT で参照してください。
+
+このファイルはプレースホルダーです。証明書ファイルはここに置かず VM 上で直接管理してください。
+秘密鍵はリポジトリにコミットしないこと。
