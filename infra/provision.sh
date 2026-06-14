@@ -197,6 +197,42 @@ id owl-control >/dev/null 2>&1 || useradd -s /sbin/nologin -d /nonexistent owl-c
 pkg_add age rclone 2>/dev/null && _ok "age / rclone インストール" || \
     _info "警告: age / rclone の自動インストール失敗。後で手動実行: pkg_add age rclone"
 
+# vmm-bios (SeaBIOS) — /etc/firmware/vmm-bios が無いと vmctl start が
+# "Cannot allocate memory" という誤った errno に化けて失敗する。
+# このファイルは firmware.openbsd.org (fw_update) では配布されていない。
+# base install set (base79.tgz 等) に含まれるファイル。
+# ベアメタル新規インストール直後など何らかの理由で欠落している場合は
+# OBD_MIRROR から HTTP で取得して vmm-bios のみ展開する。
+# HTTPS ではなく HTTP を使うのは TLS 証明書 SAN 欠落の回避のため。
+if [ -f /etc/firmware/vmm-bios ]; then
+    _ok "vmm-bios 既存 → スキップ"
+else
+    _log "/etc/firmware/vmm-bios が見つかりません — base install set から取得します..."
+    _rel_nn=$(printf '%s' "${OWL_RELEASE}" | tr -d '.')   # "7.9" → "79"
+    _base_url="http://${OBD_MIRROR}/pub/OpenBSD/${OWL_RELEASE}/amd64/base${_rel_nn}.tgz"
+    echo ""
+    echo "  ⚠  WARNING: vmm-bios 未取得のため所要時間が大幅に増加します"
+    echo "     理由: vmm-bios は base${_rel_nn}.tgz (約 200MB) に含まれており、"
+    echo "           fw_update ではなくインストールセット全体のダウンロードが必要です。"
+    echo "           ダウンロードだけで 30 分以上かかる場合があります。"
+    echo "     見込み: base${_rel_nn}.tgz 取得 (~30 分) + 4 VM インストール (~15 分) = 計 45 分以上"
+    echo "     次回以降: /etc/firmware/vmm-bios が存在すればこのステップはスキップされます。"
+    echo ""
+    _log "  取得元: ${_base_url}"
+    if ftp -o /tmp/base-vmm.tgz "${_base_url}"; then
+        tar -xzpf /tmp/base-vmm.tgz -C / './etc/firmware/vmm-bios' 2>/dev/null || \
+        tar -xzpf /tmp/base-vmm.tgz -C /  'etc/firmware/vmm-bios'  2>/dev/null || \
+            _die "vmm-bios の展開失敗 (base${_rel_nn}.tgz 内に存在しない可能性)"
+        rm -f /tmp/base-vmm.tgz
+    else
+        rm -f /tmp/base-vmm.tgz
+        _die "/etc/firmware/vmm-bios 取得失敗\n  確認: ftp http://${OBD_MIRROR}/pub/OpenBSD/${OWL_RELEASE}/amd64/base${_rel_nn}.tgz"
+    fi
+    [ -f /etc/firmware/vmm-bios ] || _die "展開後も /etc/firmware/vmm-bios が見つかりません"
+    chmod 644 /etc/firmware/vmm-bios
+    _ok "vmm-bios を base${_rel_nn}.tgz から取得・展開"
+fi
+
 # ── bridge 設定 ──────────────────────────────────────────────
 # 再実行時は vmd がすでに bridge を保持しており SIOCAIFADDR が失敗する。
 # vmd を先に停止してから bridge を設定し、後で再起動する。
@@ -275,6 +311,40 @@ switch "dev_lan" {
     interface bridge1
 }
 VMDEOF
+
+# OpenBSD では anonymous mmap が datasize rlimit にカウントされる。
+# vmd は daemon クラスで動作するため、daemon クラスの datasize が VM の最大メモリ
+# (vm-build: 4G) を下回ると vmctl start が ENOMEM で失敗する。
+# 先に確認・修正してから vmd を起動することで確実にリミットを反映させる。
+_log "login.conf daemon クラスの datasize を確認..."
+_daemon_ds=$(awk '
+    /^daemon:/{in_d=1; next}
+    in_d && /^[^: \t]/{exit}
+    in_d && /datasize[^-]/{print; exit}
+' /etc/login.conf)
+_log "  現在値: ${_daemon_ds:-(エントリなし)}"
+if ! printf '%s' "${_daemon_ds}" | grep -qi 'infinity'; then
+    _log "  daemon datasize が infinity でない → /etc/login.conf を修正します..."
+    awk '
+        /^daemon:/{in_d=1; print; next}
+        in_d && /^[^: \t]/{
+            if (!added) { print "\t:datasize=infinity:\\"; added=1 }
+            in_d=0
+        }
+        in_d && /datasize[^-]/{
+            sub(/datasize[^:]*/, "datasize=infinity")
+            added=1
+        }
+        { print }
+        END { if (in_d && !added) print "\t:datasize=infinity:\\" }
+    ' /etc/login.conf > /tmp/login.conf.new \
+        && cp /tmp/login.conf.new /etc/login.conf \
+        || _die "login.conf の更新に失敗しました"
+    cap_mkdb /etc/login.conf
+    _ok "login.conf daemon datasize=infinity 設定 (cap_mkdb 完了)"
+else
+    _ok "login.conf daemon datasize=infinity ✓"
+fi
 
 _log "vmd を enable + start..."
 rcctl enable vmd
@@ -425,9 +495,11 @@ _ok "DHCP / HTTP サーバー起動"
 
 # ── STEP 5: VM OS インストール (autoinstall) ─────────────
 _step 5 "VM OS autoinstall"
-_log "ホストメモリ: 物理=$(sysctl -n hw.physmem | awk '{printf "%d MB", $1/1024/1024}') 空き=$(sysctl -n hw.usermem | awk '{printf "%d MB", $1/1024/1024}')"
+_log "ホストメモリ:"
+_log "  物理:   $(sysctl -n hw.physmem | awk '{printf "%d MB", $1/1024/1024}')"
+_log "  実空き: $(sysctl vm.uvmexp 2>/dev/null | awk -F= '/\.free=/{f=$2}/\.pagesize=/{p=$2}END{if(f>0&&p>0)printf "%d MB",f*p/1024/1024;else print "不明"}')"
 _log "VMM 状態:"
-dmesg | grep -i 'vmm\|vmx\|svm\|ept\|rvi' | while read -r l; do _log "  dmesg: $l"; done
+dmesg | grep -Ei 'vmm|vmx|svm|ept|rvi' | while read -r l; do _log "  dmesg: $l"; done
 vmctl status 2>/dev/null | while read -r l; do _log "  vmctl: $l"; done
 # vmm(4) が利用可能か確認する (VT-x/AMD-V が BIOS で無効だと vmm0 がアタッチされない)
 if ! dmesg | grep -q 'vmm0 at mainbus0'; then
@@ -486,8 +558,8 @@ EOF
     fi
 
     # running/starting の場合のみ停止する。
-    # stopped エントリは呼び出し前の vmctl reset vms で除去済み。
-    # stopped のまま vmctl start -b を呼ぶと EALREADY になるため。
+    # vmd を最小 vm.conf で再起動しているため VM エントリはないはず。
+    # 再実行時に running/starting のまま残っている場合のガード。
     _log "[${vmname}] 既存 VM 状態を確認..."
     _vmstate=$(vmctl status 2>/dev/null | awk -v n="$vmname" '$NF==n{print $(NF-1)}')
     _log "[${vmname}] 現在状態: ${_vmstate:-なし}"
@@ -498,11 +570,18 @@ EOF
         _log "[${vmname}] 停止後の状態: $(vmctl status 2>/dev/null | awk -v n="$vmname" '$NF==n{print $(NF-1)}')"
     fi
 
-    _log "利用可能メモリ: $(sysctl -n hw.usermem | awk '{printf "%d MB", $1/1024/1024}')"
-    # vmctl reset vms で vm.conf 由来の設定も消えるため、-d / -i / -n で全パラメータを
-    # 明示する。vm.conf を参照せず vmd が新規インスタンスとして起動する。
+    _log "実空きメモリ: $(sysctl vm.uvmexp 2>/dev/null | awk -F= '/\.free=/{f=$2}/\.pagesize=/{p=$2}END{if(f>0&&p>0)printf "%d MB",f*p/1024/1024;else print "不明"}')"
+    # 最小 vm.conf で起動した vmd には VM 定義がないため、-d/-i/-n で
+    # 全パラメータを明示して新規インスタンスとして起動する。
     _log "[${vmname}] vmctl start -b $bsdrd -m ${inst_mem} -d ${disk} -i 1 -n ${swname} $vmname"
-    vmctl start -b "$bsdrd" -m "${inst_mem}" -d "${disk}" -i 1 -n "${swname}" "$vmname"
+    if ! vmctl start -b "$bsdrd" -m "${inst_mem}" -d "${disk}" -i 1 -n "${swname}" "$vmname"; then
+        _log "vmctl start 失敗 — /var/log/messages の直近 vmd/vmm/firmware ログ:"
+        grep -Ei 'vmd|vmm|firmware' /var/log/messages | tail -20 | while read -r l; do _log "  $l"; done
+        _log "daemon クラス datasize:"
+        awk '/^daemon:/,/^[^: \t]/' /etc/login.conf | grep 'datasize' | \
+            while read -r l; do _log "  $l"; done
+        _die "[${vmname}] vmctl start 失敗"
+    fi
     _info "    インストール中 (数分かかります)..."
     _log "[${vmname}] SSH 待機開始 (最大 10 分)..."
     _wait_ssh "$vmip"
@@ -530,18 +609,34 @@ _wait_ssh() {
     _die "${ip} への SSH がタイムアウト (10 分)"
 }
 
-# 前回実行の残骸で stopped 状態の VM エントリが残っている場合、
-# vmctl start -b で EALREADY が返る。vmctl reset vms で全 VM エントリを
-# 一掃してからインストールを開始する。スイッチ定義・vm.conf は不変。
-_log "インストール前 VM エントリクリア (vmctl reset vms)..."
-vmctl reset vms 2>/dev/null || true
-sleep 1
-_log "リセット後 VM 一覧: $(vmctl status 2>/dev/null | awk 'NR>1{c++}END{print c+0}') 件"
+# vm.conf (VM 定義込み) を読み込んだ vmd では stopped エントリに対して
+# vmctl start -b を呼ぶと EALREADY になる。
+# vmctl reset vms はスイッチ定義も消去する (OpenBSD 7.9 で確認)。
+# 最小 vm.conf (スイッチのみ) で vmd を再起動することで
+# VM エントリなし・スイッチ定義ありのクリーンな状態を作る。
+_log "インストール用に最小 vm.conf (スイッチのみ) を適用し vmd を再起動..."
+cat > /etc/vm.conf <<'VMDEOF'
+switch "internal_lan" {
+    interface bridge0
+}
+switch "dev_lan" {
+    interface bridge1
+}
+VMDEOF
+rcctl restart vmd
+sleep 2
+_log "vmd PID: $(pgrep -x vmd | tr '\n' ' ' || echo '不明')"
+_log "インストール前 VM 一覧: $(vmctl status 2>/dev/null | awk 'NR>1{c++}END{print c+0}') 件"
 
 _vm_install "vm-db"    "$OWL_DB_IP"    "$HOST_INT_IP"  "/var/vmm/db.img"    "internal_lan"
 _vm_install "vm-git"   "$OWL_GIT_IP"  "$HOST_DEV_IP"  "/var/vmm/git.img"   "dev_lan"
 _vm_install "vm-build" "$OWL_BUILD_IP" "$HOST_DEV_IP" "/var/vmm/build.img" "dev_lan"
 _vm_install "vm-ap"    "$OWL_AP_IP"   "$HOST_INT_IP"  "/var/vmm/ap.img"    "internal_lan"
+
+# インストール完了後に完全な vm.conf を復元する (VM 再起動時のメモリ設定等が有効化される)
+_log "完全な vm.conf を復元..."
+install -m 600 "${SELF}/host/vmd.conf" /etc/vm.conf
+_ok "vm.conf 復元"
 
 # ── STEP 6: VM 内部プロビジョニング ──────────────────────
 _step 6 "VM 内部プロビジョニング"
