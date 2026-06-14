@@ -152,6 +152,19 @@ _bridge_members() {
     printf '%s\n' "${members:-'(なし)'}"
 }
 
+_vm_state_for() {
+    local vmname="$1" out="/tmp/owl-vmctl-state.$$" state
+
+    if _vmctl_status_to "$out"; then
+        state=$(awk -v n="$vmname" 'NR>1 && $NF==n{print $(NF-1); exit}' "$out")
+        rm -f "$out" "${out}.err"
+        printf '%s\n' "$state"
+        return 0
+    fi
+    rm -f "$out" "${out}.err"
+    return 1
+}
+
 # ── ログファイル ───────────────────────────────────────────
 # OpenBSD /bin/sh (pdksh 派生) はプロセス置換 >(cmd) 未サポート。
 # named pipe + バックグラウンド tee で端末とファイルに同時出力する。
@@ -173,6 +186,7 @@ _log "ホスト: $(hostname)"
 SELF="$(cd "$(dirname "$0")" && pwd)"
 CONFIG="${SELF}/owl-config.toml"
 TOTAL=7
+_log "provision.sh: ${SELF}/provision.sh checksum=$(cksum "$0" | awk '{print $1 ":" $2}')"
 
 [ -f "$CONFIG" ] || _die "$CONFIG が見つかりません"
 
@@ -268,6 +282,8 @@ else
     fi
     [ -f /etc/firmware/vmm-bios ] || _die "fw_update 後も /etc/firmware/vmm-bios が見つかりません"
 fi
+[ -r /etc/firmware/vmm-bios ] || _die "vmm-bios が読み取れません — 'fw_update vmm' を実行してください"
+chmod 644 /etc/firmware/vmm-bios 2>/dev/null || true
 
 # ── bridge 設定 ──────────────────────────────────────────────
 # 【超堅牢化】再実行時や前回クラッシュ時のゾンビプロセス、カーネルロックを完全に破砕する
@@ -445,7 +461,7 @@ _ok "暫定 PF (NAT) 適用"
 # ── STEP 3: VM ディスクイメージ作成 ──────────────────────
 _step 3 "VM ディスクイメージ作成"
 _log "ディスクイメージディレクトリ: /var/vmm"
-install -d /var/vmm
+install -d -m 755 /var/vmm
 for spec in "ap:20G" "db:50G" "git:50G" "build:50G"; do
     name="${spec%%:*}"; size="${spec##*:}"; img="/var/vmm/${name}.img"
     if [ ! -f "$img" ]; then
@@ -491,11 +507,13 @@ subnet 10.0.1.0 netmask 255.255.255.0 {
     range 10.0.1.200 10.0.1.210;
     option routers ${HOST_INT_IP};
     next-server ${HOST_INT_IP};
+    filename "auto_install";
 }
 subnet 10.0.2.0 netmask 255.255.255.0 {
     range 10.0.2.200 10.0.2.210;
     option routers ${HOST_DEV_IP};
     next-server ${HOST_DEV_IP};
+    filename "auto_install";
 }
 DHCP
 # dhcpd は IP を持つ vether 上で listen する (bridge は L2 スイッチのみで IP なし)
@@ -573,13 +591,13 @@ Server directory = pub/OpenBSD/${OWL_RELEASE}/amd64
 EOF
 
     # bsd.rd で起動
-    # -m 512M: インストーラーは 512M で十分動く。vm.conf の本番メモリ (最大 4G) を
-    #          確保しようとすると ENOMEM になる環境でも完走できる。
-    #          インストール完了後に通常起動すれば vm.conf の値が使われる。
+    # インストーラーは 512M で十分動く。インストール完了後はいったん停止し、
+    # 本番 vm.conf を適用してから通常メモリで起動し直す。
     local bsdrd="/var/vmm/bsd.rd-${OWL_RELEASE}"
     local inst_mem="512M"
-    # 途中で切れた bsd.rd を検出して再取得する (10MB 未満は破損扱い)
-    if [ -f "$bsdrd" ] && [ "$(wc -c < "$bsdrd" | tr -d ' ')" -lt 10000000 ]; then
+    # 途中で切れた bsd.rd を検出して再取得する。
+    # OpenBSD 7.9 amd64 の bsd.rd は約 4.6MB なので、10MB 閾値は誤判定になる。
+    if [ -f "$bsdrd" ] && [ "$(wc -c < "$bsdrd" | tr -d ' ')" -lt 1000000 ]; then
         _log "[${vmname}] bsd.rd 破損検出 ($(du -h "$bsdrd" | cut -f1)) → 削除して再取得"
         rm -f "$bsdrd"
     fi
@@ -593,18 +611,22 @@ EOF
     else
         _log "[${vmname}] bsd.rd-${OWL_RELEASE} 既存 ($(du -h "$bsdrd" | cut -f1)) → 再利用"
     fi
+    chmod 644 "$bsdrd"
+    chown root:wheel "$bsdrd" 2>/dev/null || true
+    _log "[${vmname}] bsd.rd: $(ls -l "$bsdrd")"
+    _log "[${vmname}] disk:   $(ls -l "$disk")"
 
     # running/starting の場合のみ停止する。
     # vmd を最小 vm.conf で再起動しているため VM エントリはないはず。
     # 再実行時に running/starting のまま残っている場合のガード。
     _log "[${vmname}] 既存 VM 状態を確認..."
-    _vmstate=$(vmctl status 2>/dev/null | awk -v n="$vmname" '$NF==n{print $(NF-1)}')
+    _vmstate=$(_vm_state_for "$vmname" || true)
     _log "[${vmname}] 現在状態: ${_vmstate:-なし}"
     if [ "$_vmstate" = "running" ] || [ "$_vmstate" = "starting" ]; then
         _log "[${vmname}] 実行中 → vmctl stop -f (3 秒待機)..."
         vmctl stop -f "$vmname" 2>/dev/null || true
         sleep 3
-        _log "[${vmname}] 停止後の状態: $(vmctl status 2>/dev/null | awk -v n="$vmname" '$NF==n{print $(NF-1)}')"
+        _log "[${vmname}] 停止後の状態: $(_vm_state_for "$vmname" || true)"
     fi
 
     _log "実空きメモリ: $(vmstat 2>/dev/null | awk 'END{print $4}' || echo '不明')"
@@ -619,15 +641,41 @@ EOF
         [ "$_vmd_chk" -lt 10 ] || _die "[${vmname}] vmctl start 前に vmd が応答しません"
     done
 
-    # vm.conf の VM 定義を -b/-m/-d/-i/-n で明示上書きしてインストーラー用に起動する。
-    # vmctl(8): "The optional flags override the configuration file entries"
-    _log "[${vmname}] vmctl start -b $bsdrd -m ${inst_mem} -d ${disk} -i 1 -n ${swname} $vmname"
+    # インストーラー用 VM 定義を /etc/vm.conf に書いてから起動する。
+    # vmctl start -b は vmctl→vmd の fd 受け渡しに依存し、環境によって
+    # "failed to receive boot fd" になるため、vmd が boot/disk を直接開く形にする。
+    _log "[${vmname}] インストーラー用 vm.conf を書き込み..."
+    cat > /etc/vm.conf <<VMDEOF
+switch "internal_lan" {
+    interface bridge0
+}
+switch "dev_lan" {
+    interface bridge1
+}
+vm "${vmname}" {
+    disable
+    memory ${inst_mem}
+    boot "${bsdrd}"
+    boot device net
+    disk "${disk}" format raw
+    interface { switch "${swname}" }
+}
+VMDEOF
+    chmod 600 /etc/vm.conf
+    if ! vmctl reload 2>/tmp/owl-vmreload.err; then
+        _log "[${vmname}] vmctl reload 失敗:"
+        while read -r l; do _log "  $l"; done < /tmp/owl-vmreload.err
+        rm -f /tmp/owl-vmreload.err
+        _die "[${vmname}] インストーラー用 vm.conf の reload に失敗"
+    fi
+    rm -f /tmp/owl-vmreload.err
+
+    _log "[${vmname}] vmctl -v start ${vmname}"
     # vmctl stop -f 後に VMM カーネルスロットの解放が遅れる場合 EALREADY になる。
     # vmd が vm.conf で管理する VM は stopped のまま残るため、解放完了まで
     # リトライで対処する (最大 40 秒 = 20 × 2秒)。
     _vs_n=0
-    until vmctl start -b "$bsdrd" -m "${inst_mem}" -d "${disk}" -i 1 -n "${swname}" \
-              "$vmname" 2>/tmp/owl-vs.err; do
+    until vmctl -v start "$vmname" 2>/tmp/owl-vs.err; do
         if grep -q 'already in progress' /tmp/owl-vs.err 2>/dev/null; then
             _vs_n=$((_vs_n + 1))
             if [ "$_vs_n" -ge 20 ]; then
@@ -640,6 +688,8 @@ EOF
             _log "[${vmname}] VMM スロット解放待機 ${_vs_n}/20 (2秒)..."
             sleep 2
         else
+            _log "vmctl start stderr:"
+            while read -r l; do _log "  $l"; done < /tmp/owl-vs.err
             _log "vmctl start 失敗 — /var/log/messages:"
             grep -Ei 'vmd|vmm|firmware' /var/log/messages | tail -20 | while read -r l; do _log "  $l"; done
             _log "daemon クラス datasize:"
@@ -654,6 +704,26 @@ EOF
     _log "[${vmname}] SSH 待機開始 (最大 10 分)..."
     _wait_ssh "$vmip"
     _log "[${vmname}] SSH 接続確認完了"
+    _log "[${vmname}] インストール完了後の VM を停止..."
+    ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+        "root@${vmip}" "shutdown -p now" 2>/dev/null || true
+    _stop_n=0
+    while :; do
+        _stop_state=$(_vm_state_for "$vmname" || true)
+        case "$_stop_state" in
+            running|stopping|starting) ;;
+            *) break ;;
+        esac
+        sleep 2
+        _stop_n=$((_stop_n + 1))
+        if [ "$_stop_n" -ge 30 ]; then
+            _log "[${vmname}] graceful shutdown 待機タイムアウト → vmctl stop -f"
+            vmctl stop -f "$vmname" 2>/dev/null || true
+            sleep 3
+            break
+        fi
+    done
+    _log "[${vmname}] 停止後状態: $(_vm_state_for "$vmname" || echo 'なし')"
     _ok "${vmname} インストール完了"
 }
 
@@ -677,10 +747,8 @@ _wait_ssh() {
     _die "${ip} への SSH がタイムアウト (10 分)"
 }
 
-# STEP 3 の vmctl reload で起動した VM をインストーラー用に停止・再起動する。
-# vmd は再起動しない: vmctl start に -b/-m を明示すると vm.conf の値を上書きできる。
-# ("The optional flags override the configuration file entries" — vmctl(8))
-# vmd 再起動は /var/run/vmd.sock が作成されない不具合を引き起こすため廃止した。
+# 再実行時に前回の VM が残っていた場合だけ停止する。
+# この後は VM ごとにインストーラー用 vm.conf を reload し、1 台ずつ起動する。
 _log "実行中 VM をインストール前に停止..."
 
 # ① 実行中 VM を先に停止する
@@ -737,6 +805,29 @@ else
     rcctl restart vmd
 fi
 _ok "本番用 vm.conf 適用完了"
+
+_log "本番 VM を起動して SSH 応答を確認..."
+for _vm in vm-db vm-git vm-build vm-ap; do
+    _state=$(_vm_state_for "$_vm" || true)
+    if [ "$_state" != "running" ] && [ "$_state" != "starting" ]; then
+        _log "[${_vm}] vmctl start"
+        vmctl start "$_vm" 2>/tmp/owl-prod-start.err || {
+            while read -r l; do _log "  $l"; done < /tmp/owl-prod-start.err
+            rm -f /tmp/owl-prod-start.err
+            _die "[${_vm}] 本番 VM 起動に失敗"
+        }
+        rm -f /tmp/owl-prod-start.err
+    else
+        _log "[${_vm}] 既に ${_state}"
+    fi
+done
+_log "本番 VM 状態:"
+_log_vmctl_status "" || _log "  (取得失敗)"
+_wait_ssh "$OWL_DB_IP"
+_wait_ssh "$OWL_GIT_IP"
+_wait_ssh "$OWL_BUILD_IP"
+_wait_ssh "$OWL_AP_IP"
+_ok "本番 VM 起動確認完了"
 
 # ── STEP 6: VM 内部プロビジョニング ──────────────────────
 _step 6 "VM 内部プロビジョニング"
