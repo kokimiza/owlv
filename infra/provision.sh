@@ -425,8 +425,11 @@ _ok "DHCP / HTTP サーバー起動"
 
 # ── STEP 5: VM OS インストール (autoinstall) ─────────────
 _step 5 "VM OS autoinstall"
+_log "ホストメモリ: 物理=$(sysctl -n hw.physmem | awk '{printf "%d MB", $1/1024/1024}') 空き=$(sysctl -n hw.usermem | awk '{printf "%d MB", $1/1024/1024}')"
+_log "VMM 状態: $(sysctl -n kern.witnesswatch 2>/dev/null || echo 'n/a')"
 _info "install.conf を自動生成し、1 台ずつ順番にインストールします。"
 _info "インストールセットは ${OBD_MIRROR} から取得します。"
+_info "インストーラー起動メモリ: 512M (-m オプション; vm.conf の本番値とは別)"
 
 _vm_install() {
     local vmname="$1" vmip="$2" gateway="$3"
@@ -459,8 +462,12 @@ HTTP Server = ${OBD_MIRROR}
 Server directory = pub/OpenBSD/${OWL_RELEASE}/amd64
 EOF
 
-    # bsd.rd で起動 (disk / memory は vm.conf から読む)
+    # bsd.rd で起動
+    # -m 512M: インストーラーは 512M で十分動く。vm.conf の本番メモリ (最大 4G) を
+    #          確保しようとすると ENOMEM になる環境でも完走できる。
+    #          インストール完了後に通常起動すれば vm.conf の値が使われる。
     local bsdrd="/var/vmm/bsd.rd-${OWL_RELEASE}"
+    local inst_mem="512M"
     if [ ! -f "$bsdrd" ]; then
         _log "[${vmname}] bsd.rd-${OWL_RELEASE} を取得中..."
         _info "    bsd.rd を取得中..."
@@ -472,8 +479,22 @@ EOF
         _log "[${vmname}] bsd.rd-${OWL_RELEASE} 既存 → 再利用"
     fi
 
-    _log "[${vmname}] vmctl start -b $bsdrd $vmname"
-    vmctl start -b "$bsdrd" "$vmname"
+    # running/starting の場合のみ停止する。
+    # stopped エントリは呼び出し前の vmctl reset vms で除去済み。
+    # stopped のまま vmctl start -b を呼ぶと EALREADY になるため。
+    _log "[${vmname}] 既存 VM 状態を確認..."
+    _vmstate=$(vmctl status 2>/dev/null | awk -v n="$vmname" '$NF==n{print $(NF-1)}')
+    _log "[${vmname}] 現在状態: ${_vmstate:-なし}"
+    if [ "$_vmstate" = "running" ] || [ "$_vmstate" = "starting" ]; then
+        _log "[${vmname}] 実行中 → vmctl stop -f (3 秒待機)..."
+        vmctl stop -f "$vmname" 2>/dev/null || true
+        sleep 3
+        _log "[${vmname}] 停止後の状態: $(vmctl status 2>/dev/null | awk -v n="$vmname" '$NF==n{print $(NF-1)}')"
+    fi
+
+    _log "利用可能メモリ: $(sysctl -n hw.usermem | awk '{printf "%d MB", $1/1024/1024}')"
+    _log "[${vmname}] vmctl start -b $bsdrd -m ${inst_mem} $vmname"
+    vmctl start -b "$bsdrd" -m "${inst_mem}" "$vmname"
     _info "    インストール中 (数分かかります)..."
     _log "[${vmname}] SSH 待機開始 (最大 10 分)..."
     _wait_ssh "$vmip"
@@ -500,6 +521,14 @@ _wait_ssh() {
     vmctl status 2>/dev/null | while read -r l; do _log "  $l"; done
     _die "${ip} への SSH がタイムアウト (10 分)"
 }
+
+# 前回実行の残骸で stopped 状態の VM エントリが残っている場合、
+# vmctl start -b で EALREADY が返る。vmctl reset vms で全 VM エントリを
+# 一掃してからインストールを開始する。スイッチ定義・vm.conf は不変。
+_log "インストール前 VM エントリクリア (vmctl reset vms)..."
+vmctl reset vms 2>/dev/null || true
+sleep 1
+_log "リセット後 VM 一覧: $(vmctl status 2>/dev/null | awk 'NR>1{c++}END{print c+0}') 件"
 
 _vm_install "vm-db"    "$OWL_DB_IP"    "$HOST_INT_IP"
 _vm_install "vm-git"   "$OWL_GIT_IP"  "$HOST_DEV_IP"
