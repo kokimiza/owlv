@@ -48,10 +48,21 @@
 #
 # ━━━ 【実行手順】開発機から ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #
-#   rsync -avn --delete infra/ <YOUR_USERNAME>@192.168.50.200:/tmp/infra/
-#   ssh <YOUR_USERNAME>@<HOST_IP> \
-#       "install -d /etc/owl && doas mv /tmp/infra /etc/owl/infra && \
-#        doas sh /etc/owl/infra/provision.sh"
+# 5. 時刻を合わせる (OCSP 検証が通らなくなるため必須):
+#      ssh <YOUR_USERNAME>@192.168.50.200 'doas rdate -n pool.ntp.org'
+#
+#    macOS Sequoia 以降は rsync が openrsync に置き換わっており、OpenBSD 側の
+#    openrsync と --delete 系フラグの互換性がない。scp -r を使うこと。
+#
+#   # (1) 古い残骸をリモートから削除 (再実行時にネストするのを防ぐ)
+#   ssh <YOUR_USERNAME>@192.168.50.200 'rm -rf /tmp/infra'
+#
+#   # (2) infra ディレクトリごと /tmp/ に転送 → /tmp/infra/ になる
+#   scp -r infra <YOUR_USERNAME>@192.168.50.200:/tmp/
+#
+#   # (3) リモートで配置・プロビジョニング実行 (コマンドは '' で囲んでリモートで実行)
+#   ssh <YOUR_USERNAME>@192.168.50.200 \
+#       'doas install -d /etc/owl && doas mv /tmp/infra /etc/owl/infra && doas sh /etc/owl/infra/provision.sh'
 #
 # ━━━ 【Yubikey が届いたら】━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #
@@ -90,7 +101,12 @@ TOTAL=7
 _toml() {
     awk -v sec="[$1]" -v k="$2" '
         /^\[/ { in_sec=($0==sec) }
-        in_sec && $1==k { gsub(/^[^=]+=[ "]*|["]*$/,""); print; exit }
+        in_sec && $1==k {
+            sub(/^[^=]+=[ ]*/, "")  # "key = " を除去
+            sub(/[ ]*#.*$/, "")     # インラインコメント "# ..." を除去
+            gsub(/^"|"$/, "")       # 前後の引用符を除去
+            print; exit
+        }
     ' "$CONFIG"
 }
 
@@ -136,9 +152,9 @@ install -m 700 "${SELF}/host/owl-pfctl-pinhole"      /usr/local/sbin/owl-pfctl-p
 install -m 600 /dev/null /etc/owl/known_hosts
 _ok "管理スクリプト配置"
 
-# 設定ファイルを配置 (vmd.conf / doas.conf / newsyslog.conf / crontab)
+# 設定ファイルを配置 (doas.conf / newsyslog.conf / crontab)
+# vmd.conf は STEP 3 でディスクイメージ作成後に配置する (先に置くと起動失敗)
 # pf.conf と rc.conf.local は STEP 7 の本番封鎖時に適用する
-install -m 600 "${SELF}/host/vmd.conf"       /etc/vm.conf
 install -m 644 "${SELF}/host/doas.conf"      /etc/doas.conf
 install -m 644 "${SELF}/host/newsyslog.conf" /etc/newsyslog.conf
 install -m 600 "${SELF}/host/crontab"        /etc/crontab
@@ -151,27 +167,46 @@ id owl-control >/dev/null 2>&1 || useradd -s /sbin/nologin -d /nonexistent owl-c
 pkg_add age rclone 2>/dev/null && _ok "age / rclone インストール" || \
     _info "警告: age / rclone の自動インストール失敗。後で手動実行: pkg_add age rclone"
 
-# vmd を起動 (vether0/1 がここで生成される)
+# veb インターフェースは vmd より先に作成する必要がある
+# (vmd.conf の switch interface 参照が起動時に検証されるため)
+ifconfig veb0 create 2>/dev/null || true
+ifconfig veb1 create 2>/dev/null || true
+_ok "veb0 / veb1 作成"
+
+# vmd をスイッチのみの最小 config で起動する
+# ディスクイメージ参照を含む完全な vm.conf は STEP 3 で配置する
+cat > /etc/vm.conf <<'VMDEOF'
+switch "internal_lan" {
+    interface veb0
+}
+switch "dev_lan" {
+    interface veb1
+}
+VMDEOF
 rcctl enable vmd
-rcctl start vmd 2>/dev/null || rcctl restart vmd
-sleep 2   # vether インターフェース生成を待つ
-_ok "vmd 起動"
+if ! rcctl start vmd 2>/dev/null; then
+    _info "vmd エラー詳細:"
+    grep -i vmd /var/log/messages | tail -5 | while read -r l; do _info "  $l"; done
+    _die "vmd の起動に失敗しました"
+fi
+sleep 1
+_ok "vmd 起動 (スイッチのみ)"
 
 # ── STEP 2: 仮想ネットワーク ──────────────────────────────
 _step 2 "仮想ネットワーク設定"
 
 # ホストを両 LAN のゲートウェイとして設定
-cat > /etc/hostname.vether0 <<EOF
+cat > /etc/hostname.veb0 <<EOF
 inet ${HOST_INT_IP} 255.255.255.0
 description "internal_lan gateway"
 EOF
-cat > /etc/hostname.vether1 <<EOF
+cat > /etc/hostname.veb1 <<EOF
 inet ${HOST_DEV_IP} 255.255.255.0
 description "dev_lan gateway"
 EOF
-ifconfig vether0 inet "${HOST_INT_IP}" 255.255.255.0 up
-ifconfig vether1 inet "${HOST_DEV_IP}" 255.255.255.0 up
-_ok "vether0 (${HOST_INT_IP}) / vether1 (${HOST_DEV_IP}) 設定"
+ifconfig veb0 inet "${HOST_INT_IP}" 255.255.255.0 up
+ifconfig veb1 inet "${HOST_DEV_IP}" 255.255.255.0 up
+_ok "veb0 (${HOST_INT_IP}) / veb1 (${HOST_DEV_IP}) 設定"
 
 # VM がミラーからインストールセットを取得できるよう IP フォワーディング + NAT を有効化
 # (本番封鎖は STEP 7 で適用するため、ここでは最小限のルールのみ)
@@ -189,8 +224,8 @@ block all
 pass in on ${WAN_IF} proto tcp to port 22
 
 # VM ↔ ホスト: DHCP / HTTP (autoinstall) + SSH (プロビジョニング)
-pass on vether0 all
-pass on vether1 all
+pass on veb0 all
+pass on veb1 all
 
 # VM → インターネット: インストールセット取得のみ
 pass out on ${WAN_IF} all
@@ -208,6 +243,11 @@ for spec in "ap:20G" "db:50G" "git:50G" "build:50G"; do
         _info "${name}.img 既存のためスキップ"
     fi
 done
+
+# ディスクイメージが揃ったので完全な vm.conf を配置して reload
+install -m 600 "${SELF}/host/vmd.conf" /etc/vm.conf
+vmctl reload 2>/dev/null || rcctl restart vmd
+_ok "vm.conf (VM 定義込み) を配置・reload"
 
 # ── STEP 4: SSH 鍵生成 ────────────────────────────────────
 _step 4 "SSH 鍵生成"
@@ -242,7 +282,7 @@ subnet 10.0.2.0 netmask 255.255.255.0 {
     next-server ${HOST_DEV_IP};
 }
 DHCP
-rcctl set dhcpd flags "-c /tmp/dhcpd-prov.conf vether0 vether1"
+rcctl set dhcpd flags "-c /tmp/dhcpd-prov.conf veb0 veb1"
 rcctl start dhcpd 2>/dev/null || rcctl restart dhcpd
 
 install -d /tmp/owl-install-www

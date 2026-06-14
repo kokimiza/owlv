@@ -4,7 +4,7 @@
 
 [host]
 hostname        = "owlhost"
-openbsd_release = "7.7"       # Build VM / AP VM のリリースロックステップ (§1.3)
+openbsd_release = "7.9"       # Build VM / AP VM のリリースロックステップ (§1.3)
 wan_interface   = "em0"       # 外部インターフェース (通常は全遮断)
 
 [network.internal_lan]
