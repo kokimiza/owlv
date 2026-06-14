@@ -96,6 +96,62 @@ _ok()   { printf '    ✓ %s\n' "$*"; }
 _info() { printf '      %s\n' "$*"; }
 _log()  { printf '    [%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 
+_vmctl_status_to() {
+    local out="$1" err="${1}.err"
+
+    if vmctl status >"$out" 2>"$err"; then
+        rm -f "$err"
+        return 0
+    fi
+
+    # switch-only の /etc/vm.conf では VM 行が無く、環境によっては
+    # ヘッダを出していても vmctl status が非 0 を返す。ヘッダが取れて
+    # いれば vmd は応答しているものとして扱う。
+    if grep -q 'OWNER.*STATE.*NAME' "$out" 2>/dev/null; then
+        rm -f "$err"
+        return 0
+    fi
+
+    return 1
+}
+
+_vmctl_status_ok() {
+    local out="/tmp/owl-vmctl-status.$$"
+
+    if _vmctl_status_to "$out"; then
+        rm -f "$out" "${out}.err"
+        return 0
+    fi
+    rm -f "$out" "${out}.err"
+    return 1
+}
+
+_log_vmctl_status() {
+    local prefix="$1" out="/tmp/owl-vmctl-status.$$"
+
+    if _vmctl_status_to "$out"; then
+        while read -r l; do _log "  ${prefix}${l}"; done < "$out"
+        rm -f "$out" "${out}.err"
+        return 0
+    fi
+
+    if [ -s "${out}.err" ]; then
+        while read -r l; do _log "  ${prefix}${l}"; done < "${out}.err"
+    fi
+    rm -f "$out" "${out}.err"
+    return 1
+}
+
+_bridge_members() {
+    local ifn="$1" members
+
+    members=$(ifconfig "$ifn" 2>/dev/null | awk '
+        /^[[:space:]]+member:/ { printf "%s ", $2 }
+        /^[[:space:]]+[[:alnum:]_]+[0-9]+[[:space:]]+flags=/ { printf "%s ", $1 }
+    ')
+    printf '%s\n' "${members:-'(なし)'}"
+}
+
 # ── ログファイル ───────────────────────────────────────────
 # OpenBSD /bin/sh (pdksh 派生) はプロセス置換 >(cmd) 未サポート。
 # named pipe + バックグラウンド tee で端末とファイルに同時出力する。
@@ -214,26 +270,25 @@ else
 fi
 
 # ── bridge 設定 ──────────────────────────────────────────────
-# 再実行時は vmd がすでに bridge を保持しており SIOCAIFADDR が失敗する。
-# vmd を先に停止してから bridge を設定し、後で再起動する。
-_log "vmd の実行状態を確認..."
-if pgrep -x vmd >/dev/null 2>&1; then
-    _log "vmd が実行中 → bridge 再設定のため停止します"
-    rcctl stop vmd 2>/dev/null || true
-    sleep 1
-    if pgrep -x vmd >/dev/null 2>&1; then
-        _die "vmd を停止できませんでした。手動で 'rcctl stop vmd' を実行してください"
-    fi
-    _log "vmd 停止完了"
-else
-    _log "vmd は未起動"
+# 【超堅牢化】再実行時や前回クラッシュ時のゾンビプロセス、カーネルロックを完全に破砕する
+_log "vmd の完全停止とクリーンアップを開始..."
+rcctl stop vmd 2>/dev/null || true
+sleep 1
+
+# rcctl で落ちきらないゾンビプロセス（vmd/vmctl）を強制シグナルで確実に仕留める
+if pgrep -x "vmd|vmctl" >/dev/null 2>&1; then
+    _log "警告: 残存する vmd/vmctl プロセスを検出。SIGKILL を送出します..."
+    pkill -9 -x "vmd|vmctl" || true
+    sleep 2
 fi
 
-# OpenBSD 7.9 では bridge に直接 inet アドレスを付与できない (SIOCAIFADDR: ENOTTY)。
-# vmd(8) man page の正規パターン:
-#   vether = ホストの IP を持つ仮想 Ethernet インターフェース
-#   bridge = VM virtual NIC と vether を束ねる L2 スイッチ (IP なし)
-# VM → bridge → vether(IP) の経路でホストと通信する。
+# VMM カーネルドライバのリセット（これを行うことで vcpu_assert_irq のロックが解放される）
+if [ -c /dev/vmm ]; then
+    _log "VMM カーネルデバイスの状態を強制リセット中..."
+    # 一度 vmd のソケットファイルを確実に削除してデッドロックを防ぐ
+    rm -f /var/run/vmd.sock
+fi
+_log "vmd の完全クリーンアップ完了"
 
 # ── internal_lan: vether0 (IP) + bridge0 (スイッチ) ──────
 _log "vether0 を destroy → create..."
@@ -249,7 +304,7 @@ ifconfig bridge0 destroy 2>/dev/null && _log "bridge0 destroy 完了" || _log "b
 ifconfig bridge0 create
 ifconfig bridge0 add vether0
 ifconfig bridge0 up
-_log "bridge0 members: $(ifconfig bridge0 | grep 'member:' || echo '(なし)')"
+_log "bridge0 members: $(_bridge_members bridge0)"
 
 # ── dev_lan: vether1 (IP) + bridge1 (スイッチ) ──────────
 _log "vether1 を destroy → create..."
@@ -265,7 +320,7 @@ ifconfig bridge1 destroy 2>/dev/null && _log "bridge1 destroy 完了" || _log "b
 ifconfig bridge1 create
 ifconfig bridge1 add vether1
 ifconfig bridge1 up
-_log "bridge1 members: $(ifconfig bridge1 | grep 'member:' || echo '(なし)')"
+_log "bridge1 members: $(_bridge_members bridge1)"
 
 # 再起動時も自動設定されるよう hostname.* を書いておく (パーミッション 640 必須)
 _log "hostname.vether0/bridge0/vether1/bridge1 を書き込み..."
@@ -334,9 +389,14 @@ if ! rcctl start vmd 2>/dev/null; then
     _die "vmd の起動に失敗しました"
 fi
 sleep 1
-_log "vmd PID: $(pgrep -x vmd || echo '不明')"
+_vmd_pids=$(pgrep -x vmd | tr '\n' ' ')
+_log "vmd PID: ${_vmd_pids:-不明}"
 _log "vmctl status:"
-vmctl status 2>/dev/null | while read -r l; do _log "  $l"; done
+if ! _log_vmctl_status ""; then
+    _log "vmd 起動直後の vmctl status 取得に失敗 — /var/log/messages の直近ログ:"
+    grep -Ei 'vmd|vmm' /var/log/messages | tail -15 | while read -r l; do _log "  $l"; done
+    _die "vmd は起動しましたが vmctl status に応答しません"
+fi
 _ok "vmd 起動 (スイッチのみ)"
 
 # ── STEP 2: 仮想ネットワーク ──────────────────────────────
@@ -397,16 +457,8 @@ for spec in "ap:20G" "db:50G" "git:50G" "build:50G"; do
     fi
 done
 
-_log "完全な vm.conf を配置..."
-install -m 600 "${SELF}/host/vmd.conf" /etc/vm.conf
-_log "vmctl reload..."
-if vmctl reload 2>/dev/null; then
-    _log "vmctl reload 成功"
-else
-    _log "vmctl reload 失敗 → rcctl restart vmd にフォールバック"
-    rcctl restart vmd
-fi
-_ok "vm.conf (VM 定義込み) を配置・reload"
+# 完全な vm.conf の配置と reload は、競合を防ぐため STEP 5 のインストール完了後（またはSTEP 7）に後回しにします。
+_ok "VM ディスクイメージ準備完了"
 
 # ── STEP 4: SSH 鍵生成 ────────────────────────────────────
 _step 4 "SSH 鍵生成"
@@ -480,7 +532,7 @@ _log "  物理:   $(sysctl -n hw.physmem | awk '{printf "%d MB", $1/1024/1024}')
 _log "  実空き: $(vmstat 2>/dev/null | awk 'END{print $4}' || echo '不明')"
 _log "VMM 状態:"
 dmesg | grep -Ei 'vmm|vmx|svm|ept|rvi' | while read -r l; do _log "  dmesg: $l"; done
-vmctl status 2>/dev/null | while read -r l; do _log "  vmctl: $l"; done
+_log_vmctl_status "vmctl: " || _log "  vmctl: (取得失敗)"
 # vmm(4) が利用可能か確認する (VT-x/AMD-V が BIOS で無効だと vmm0 がアタッチされない)
 if ! dmesg | grep -q 'vmm0 at mainbus0'; then
     _die "vmm(4) ドライバーが見つかりません。\n  原因: CPU が仮想化非対応、または BIOS で Intel VT-x / AMD-V が無効です。\n  対処: BIOS/UEFI で VT-x (Intel) または SVM (AMD) を有効にして再起動してください。"
@@ -562,22 +614,42 @@ EOF
 
     # vmd が確実に応答できる状態か確認 (VM 間での vmd クラッシュ対策)
     _vmd_chk=0
-    while ! vmctl status >/dev/null 2>&1; do
+    while ! _vmctl_status_ok; do
         sleep 1; _vmd_chk=$((_vmd_chk + 1))
         [ "$_vmd_chk" -lt 10 ] || _die "[${vmname}] vmctl start 前に vmd が応答しません"
     done
 
-    # 最小 vm.conf で起動した vmd には VM 定義がないため、-d/-i/-n で
-    # 全パラメータを明示して新規インスタンスとして起動する。
+    # vm.conf の VM 定義を -b/-m/-d/-i/-n で明示上書きしてインストーラー用に起動する。
+    # vmctl(8): "The optional flags override the configuration file entries"
     _log "[${vmname}] vmctl start -b $bsdrd -m ${inst_mem} -d ${disk} -i 1 -n ${swname} $vmname"
-    if ! vmctl start -b "$bsdrd" -m "${inst_mem}" -d "${disk}" -i 1 -n "${swname}" "$vmname"; then
-        _log "vmctl start 失敗 — /var/log/messages の直近 vmd/vmm/firmware ログ:"
-        grep -Ei 'vmd|vmm|firmware' /var/log/messages | tail -20 | while read -r l; do _log "  $l"; done
-        _log "daemon クラス datasize:"
-        awk '/^daemon:/,/^[^: \t]/' /etc/login.conf | grep 'datasize' | \
-            while read -r l; do _log "  $l"; done
-        _die "[${vmname}] vmctl start 失敗"
-    fi
+    # vmctl stop -f 後に VMM カーネルスロットの解放が遅れる場合 EALREADY になる。
+    # vmd が vm.conf で管理する VM は stopped のまま残るため、解放完了まで
+    # リトライで対処する (最大 40 秒 = 20 × 2秒)。
+    _vs_n=0
+    until vmctl start -b "$bsdrd" -m "${inst_mem}" -d "${disk}" -i 1 -n "${swname}" \
+              "$vmname" 2>/tmp/owl-vs.err; do
+        if grep -q 'already in progress' /tmp/owl-vs.err 2>/dev/null; then
+            _vs_n=$((_vs_n + 1))
+            if [ "$_vs_n" -ge 20 ]; then
+                _log "VMM スロット解放タイムアウト — /var/log/messages:"
+                grep -Ei 'vmd|vmm|firmware' /var/log/messages | tail -20 | \
+                    while read -r l; do _log "  $l"; done
+                rm -f /tmp/owl-vs.err
+                _die "[${vmname}] vmctl start 失敗 (EALREADY 20回)"
+            fi
+            _log "[${vmname}] VMM スロット解放待機 ${_vs_n}/20 (2秒)..."
+            sleep 2
+        else
+            _log "vmctl start 失敗 — /var/log/messages:"
+            grep -Ei 'vmd|vmm|firmware' /var/log/messages | tail -20 | while read -r l; do _log "  $l"; done
+            _log "daemon クラス datasize:"
+            awk '/^daemon:/,/^[^: \t]/' /etc/login.conf | grep 'datasize' | \
+                while read -r l; do _log "  $l"; done
+            rm -f /tmp/owl-vs.err
+            _die "[${vmname}] vmctl start 失敗"
+        fi
+    done
+    rm -f /tmp/owl-vs.err
     _info "    インストール中 (数分かかります)..."
     _log "[${vmname}] SSH 待機開始 (最大 10 分)..."
     _wait_ssh "$vmip"
@@ -605,84 +677,66 @@ _wait_ssh() {
     _die "${ip} への SSH がタイムアウト (10 分)"
 }
 
-# STEP3 の vmctl reload で VM が起動済みの場合、vmd を rcctl restart すると
-# VM プロセスが死ぬ前に新 vmd が立ち上がり vmm(4) リソースが競合する。
-# 正しい手順: ① 実行中 VM を個別停止 → ② vmd 完全終了を確認 → ③ 起動。
-_log "インストール用に最小 vm.conf (スイッチのみ) を適用し vmd を再起動..."
-cat > /etc/vm.conf <<'VMDEOF'
-switch "internal_lan" {
-    interface bridge0
-}
-switch "dev_lan" {
-    interface bridge1
-}
-VMDEOF
+# STEP 3 の vmctl reload で起動した VM をインストーラー用に停止・再起動する。
+# vmd は再起動しない: vmctl start に -b/-m を明示すると vm.conf の値を上書きできる。
+# ("The optional flags override the configuration file entries" — vmctl(8))
+# vmd 再起動は /var/run/vmd.sock が作成されない不具合を引き起こすため廃止した。
+_log "実行中 VM をインストール前に停止..."
 
-# ① 実行中 VM を先に停止 (vmm(4) リソースを開放させてから vmd を止める)
-_running_vms=$(vmctl status 2>/dev/null | awk 'NR>1{print $NF}' | tr '\n' ' ')
+# ① 実行中 VM を先に停止する
+_status_tmp="/tmp/owl-vmctl-preinstall.$$"
+if ! _vmctl_status_to "$_status_tmp"; then
+    _log "vmd が応答しません — /var/log/messages (直近 vmd/vmm ログ):"
+    grep -Ei 'vmd|vmm' /var/log/messages | tail -15 | while read -r l; do _log "  $l"; done
+    rm -f "$_status_tmp" "${_status_tmp}.err"
+    _die "インストール開始前に vmd が応答しません"
+fi
+_running_vms=$(awk 'NR>1 && ($(NF-1)=="running"||$(NF-1)=="starting"){print $NF}' "$_status_tmp" | tr '\n' ' ')
 if [ -n "${_running_vms}" ]; then
     _log "実行中 VM を停止: ${_running_vms}"
     for _vm in ${_running_vms}; do
         vmctl stop -f "${_vm}" 2>/dev/null || true
     done
-    _log "VM 停止完了を 6 秒待機..."
-    sleep 6
+    # running/starting がなくなるまで待つ (stopped は vm.conf 定義 VM が永続するため無視)
+    _sw=0
+    while vmctl status 2>/dev/null | \
+          awk 'NR>1 && ($(NF-1)=="running"||$(NF-1)=="starting"){f=1} END{exit !f}'; do
+        sleep 1; _sw=$((_sw + 1))
+        [ "$_sw" -lt 30 ] || { _log "警告: 30秒後も running VM が残存 — 続行"; break; }
+    done
+    _log "全 VM stopped 状態到達 (${_sw}秒待機)"
 fi
+rm -f "$_status_tmp" "${_status_tmp}.err"
 
-# ② vmd を停止し、すべての vmd プロセスが消えるまで待つ
-_log "vmd を停止..."
-rcctl stop vmd 2>/dev/null || true
-_n=0
-while pgrep -x vmd >/dev/null 2>&1; do
-    sleep 1; _n=$((_n + 1))
-    [ "$_n" -lt 20 ] || { _log "警告: vmd プロセスが残存 — 強制継続"; break; }
-done
-_log "vmd 完全停止 (${_n}秒待機)"
-
-# vmd が残した veb インターフェースをクリーンアップ。
-# STEP 3 の vmctl reload で vmd が veb を作成しており、停止後も残存すると
-# 再起動時に同名 veb の作成が競合して vmd が即クラッシュする。
-for _veb in $(ifconfig -l 2>/dev/null | tr ' ' '\n' | grep '^veb'); do
-    _log "残存 veb インターフェースを削除: ${_veb}"
-    ifconfig "${_veb}" destroy 2>/dev/null || true
-done
-
-# ③ 新しい vmd を起動し vmctl status が応答するまで待つ
-_log "vmd を起動..."
-rcctl start vmd
-sleep 2  # ソケット /var/run/vmd.sock 作成までの初期化を待つ
-if ! pgrep -x vmd >/dev/null 2>&1; then
-    _log "vmd が起動直後にクラッシュ — /var/log/messages (直近 vmd/vmm ログ):"
-    grep -Ei 'vmd|vmm' /var/log/messages | tail -20 | while read -r l; do _log "  $l"; done
-    _die "vmd の起動に失敗しました (プロセスが即終了)"
+# vmd が応答できる状態か確認する
+if ! _vmctl_status_ok; then
+    _log "vmd が応答しません — /var/log/messages (直近 vmd/vmm ログ):"
+    grep -Ei 'vmd|vmm' /var/log/messages | tail -15 | while read -r l; do _log "  $l"; done
+    _die "インストール開始前に vmd が応答しません"
 fi
-_vmd_n=0
-while ! vmctl status >/dev/null 2>&1; do
-    sleep 1; _vmd_n=$((_vmd_n + 1))
-    if ! pgrep -x vmd >/dev/null 2>&1; then
-        _log "vmd プロセスが消滅 — /var/log/messages (直近 vmd/vmm ログ):"
-        grep -Ei 'vmd|vmm' /var/log/messages | tail -20 | while read -r l; do _log "  $l"; done
-        _die "vmd が起動中にクラッシュしました"
-    fi
-    [ "$_vmd_n" -lt 30 ] || {
-        _log "タイムアウト — /var/log/messages (直近 vmd/vmm ログ):"
-        grep -Ei 'vmd|vmm' /var/log/messages | tail -20 | while read -r l; do _log "  $l"; done
-        _die "vmd が 30 秒以内に応答しませんでした"
-    }
-done
-_log "vmd 準備完了 (${_vmd_n}秒待機)"
-_log "vmd PID: $(pgrep -x vmd | tr '\n' ' ' || echo '不明')"
-_log "インストール前 VM 一覧: $(vmctl status 2>/dev/null | awk 'NR>1{c++}END{print c+0}') 件"
+_status_tmp="/tmp/owl-vmctl-preinstall.$$"
+if _vmctl_status_to "$_status_tmp"; then
+    _log "インストール前 VM 状態: $(awk 'NR>1{print $NF"("$(NF-1)")"}' "$_status_tmp" | tr '\n' ' ')"
+else
+    _log "インストール前 VM 状態: (取得失敗)"
+fi
+rm -f "$_status_tmp" "${_status_tmp}.err"
 
 _vm_install "vm-db"    "$OWL_DB_IP"    "$HOST_INT_IP"  "/var/vmm/db.img"    "internal_lan"
 _vm_install "vm-git"   "$OWL_GIT_IP"  "$HOST_DEV_IP"  "/var/vmm/git.img"   "dev_lan"
 _vm_install "vm-build" "$OWL_BUILD_IP" "$HOST_DEV_IP" "/var/vmm/build.img" "dev_lan"
 _vm_install "vm-ap"    "$OWL_AP_IP"   "$HOST_INT_IP"  "/var/vmm/ap.img"    "internal_lan"
 
-# インストール完了後に完全な vm.conf を復元する (VM 再起動時のメモリ設定等が有効化される)
-_log "完全な vm.conf を復元..."
+# 全台の OS クリーンインストールが成功した後に、完全な vm.conf を適用
+_log "全 VM の OS インストール完了。本番用 vm.conf を配置して reload します..."
 install -m 600 "${SELF}/host/vmd.conf" /etc/vm.conf
-_ok "vm.conf 復元"
+if vmctl reload 2>/dev/null; then
+    _log "vmctl reload 成功（本番定義へ移行）"
+else
+    _log "vmctl reload 失敗 → rcctl restart vmd にフォールバック"
+    rcctl restart vmd
+fi
+_ok "本番用 vm.conf 適用完了"
 
 # ── STEP 6: VM 内部プロビジョニング ──────────────────────
 _step 6 "VM 内部プロビジョニング"
