@@ -426,13 +426,19 @@ _ok "DHCP / HTTP サーバー起動"
 # ── STEP 5: VM OS インストール (autoinstall) ─────────────
 _step 5 "VM OS autoinstall"
 _log "ホストメモリ: 物理=$(sysctl -n hw.physmem | awk '{printf "%d MB", $1/1024/1024}') 空き=$(sysctl -n hw.usermem | awk '{printf "%d MB", $1/1024/1024}')"
-_log "VMM 状態: $(sysctl -n kern.witnesswatch 2>/dev/null || echo 'n/a')"
+_log "VMM 状態:"
+dmesg | grep -i 'vmm\|vmx\|svm\|ept\|rvi' | while read -r l; do _log "  dmesg: $l"; done
+vmctl status 2>/dev/null | while read -r l; do _log "  vmctl: $l"; done
+# vmm(4) が利用可能か確認する (VT-x/AMD-V が BIOS で無効だと vmm0 がアタッチされない)
+if ! dmesg | grep -q 'vmm0 at mainbus0'; then
+    _die "vmm(4) ドライバーが見つかりません。\n  原因: CPU が仮想化非対応、または BIOS で Intel VT-x / AMD-V が無効です。\n  対処: BIOS/UEFI で VT-x (Intel) または SVM (AMD) を有効にして再起動してください。"
+fi
 _info "install.conf を自動生成し、1 台ずつ順番にインストールします。"
 _info "インストールセットは ${OBD_MIRROR} から取得します。"
 _info "インストーラー起動メモリ: 512M (-m オプション; vm.conf の本番値とは別)"
 
 _vm_install() {
-    local vmname="$1" vmip="$2" gateway="$3"
+    local vmname="$1" vmip="$2" gateway="$3" disk="$4" swname="$5"
 
     _info "-- ${vmname} (${vmip})"
     _log "[${vmname}] install.conf を生成 (gateway=${gateway})..."
@@ -493,8 +499,10 @@ EOF
     fi
 
     _log "利用可能メモリ: $(sysctl -n hw.usermem | awk '{printf "%d MB", $1/1024/1024}')"
-    _log "[${vmname}] vmctl start -b $bsdrd -m ${inst_mem} $vmname"
-    vmctl start -b "$bsdrd" -m "${inst_mem}" "$vmname"
+    # vmctl reset vms で vm.conf 由来の設定も消えるため、-d / -i / -n で全パラメータを
+    # 明示する。vm.conf を参照せず vmd が新規インスタンスとして起動する。
+    _log "[${vmname}] vmctl start -b $bsdrd -m ${inst_mem} -d ${disk} -i 1 -n ${swname} $vmname"
+    vmctl start -b "$bsdrd" -m "${inst_mem}" -d "${disk}" -i 1 -n "${swname}" "$vmname"
     _info "    インストール中 (数分かかります)..."
     _log "[${vmname}] SSH 待機開始 (最大 10 分)..."
     _wait_ssh "$vmip"
@@ -530,10 +538,10 @@ vmctl reset vms 2>/dev/null || true
 sleep 1
 _log "リセット後 VM 一覧: $(vmctl status 2>/dev/null | awk 'NR>1{c++}END{print c+0}') 件"
 
-_vm_install "vm-db"    "$OWL_DB_IP"    "$HOST_INT_IP"
-_vm_install "vm-git"   "$OWL_GIT_IP"  "$HOST_DEV_IP"
-_vm_install "vm-build" "$OWL_BUILD_IP" "$HOST_DEV_IP"
-_vm_install "vm-ap"    "$OWL_AP_IP"   "$HOST_INT_IP"
+_vm_install "vm-db"    "$OWL_DB_IP"    "$HOST_INT_IP"  "/var/vmm/db.img"    "internal_lan"
+_vm_install "vm-git"   "$OWL_GIT_IP"  "$HOST_DEV_IP"  "/var/vmm/git.img"   "dev_lan"
+_vm_install "vm-build" "$OWL_BUILD_IP" "$HOST_DEV_IP" "/var/vmm/build.img" "dev_lan"
+_vm_install "vm-ap"    "$OWL_AP_IP"   "$HOST_INT_IP"  "/var/vmm/ap.img"    "internal_lan"
 
 # ── STEP 6: VM 内部プロビジョニング ──────────────────────
 _step 6 "VM 内部プロビジョニング"
