@@ -213,42 +213,56 @@ else
     _log "vmd は未起動"
 fi
 
-# vmd が以前使用した bridge は内部状態が残り SIOCAIFADDR を拒否するため
-# 必ず destroy → create でリセットしてから IP を付与する。
-_log "bridge0 を destroy → create でリセット..."
+# OpenBSD 7.9 では bridge に直接 inet アドレスを付与できない (SIOCAIFADDR: ENOTTY)。
+# vmd(8) man page の正規パターン:
+#   vether = ホストの IP を持つ仮想 Ethernet インターフェース
+#   bridge = VM virtual NIC と vether を束ねる L2 スイッチ (IP なし)
+# VM → bridge → vether(IP) の経路でホストと通信する。
+
+# ── internal_lan: vether0 (IP) + bridge0 (スイッチ) ──────
+_log "vether0 を destroy → create..."
+ifconfig vether0 destroy 2>/dev/null && _log "vether0 destroy 完了" || _log "vether0 は存在しなかった"
+ifconfig vether0 create
+_log "vether0 に inet ${HOST_INT_IP} netmask 255.255.255.0 up を設定..."
+ifconfig vether0 inet "${HOST_INT_IP}" netmask 255.255.255.0 up \
+    || _die "vether0 への IP 設定失敗"
+_log "vether0 状態: $(ifconfig vether0 | grep 'inet ')"
+
+_log "bridge0 を destroy → create → vether0 を追加..."
 ifconfig bridge0 destroy 2>/dev/null && _log "bridge0 destroy 完了" || _log "bridge0 は存在しなかった"
 ifconfig bridge0 create
-_log "bridge0 作成完了"
+ifconfig bridge0 add vether0
+ifconfig bridge0 up
+_log "bridge0 members: $(ifconfig bridge0 | grep 'member:' || echo '(なし)')"
 
-_log "bridge1 を destroy → create でリセット..."
+# ── dev_lan: vether1 (IP) + bridge1 (スイッチ) ──────────
+_log "vether1 を destroy → create..."
+ifconfig vether1 destroy 2>/dev/null && _log "vether1 destroy 完了" || _log "vether1 は存在しなかった"
+ifconfig vether1 create
+_log "vether1 に inet ${HOST_DEV_IP} netmask 255.255.255.0 up を設定..."
+ifconfig vether1 inet "${HOST_DEV_IP}" netmask 255.255.255.0 up \
+    || _die "vether1 への IP 設定失敗"
+_log "vether1 状態: $(ifconfig vether1 | grep 'inet ')"
+
+_log "bridge1 を destroy → create → vether1 を追加..."
 ifconfig bridge1 destroy 2>/dev/null && _log "bridge1 destroy 完了" || _log "bridge1 は存在しなかった"
 ifconfig bridge1 create
-_log "bridge1 作成完了"
+ifconfig bridge1 add vether1
+ifconfig bridge1 up
+_log "bridge1 members: $(ifconfig bridge1 | grep 'member:' || echo '(なし)')"
 
-# netmask キーワードを明示して dest_address との曖昧さを排除する
-_log "bridge0 に inet ${HOST_INT_IP} netmask 255.255.255.0 up を設定..."
-ifconfig bridge0 inet "${HOST_INT_IP}" netmask 255.255.255.0 up \
-    || _die "bridge0 への IP 設定失敗 (ifconfig bridge0 inet)"
-_log "bridge0 状態: $(ifconfig bridge0 | grep 'inet ')"
-
-_log "bridge1 に inet ${HOST_DEV_IP} netmask 255.255.255.0 up を設定..."
-ifconfig bridge1 inet "${HOST_DEV_IP}" netmask 255.255.255.0 up \
-    || _die "bridge1 への IP 設定失敗 (ifconfig bridge1 inet)"
-_log "bridge1 状態: $(ifconfig bridge1 | grep 'inet ')"
-
-# 再起動時も自動設定されるよう hostname.bridge* を書いておく (netstart 用)
-# パーミッション 640 = netstart の "insecure" 警告を抑制
-_log "/etc/hostname.bridge0 を書き込み (640)..."
-printf 'inet %s netmask 255.255.255.0\ndescription "internal_lan gateway"\nup\n' \
-    "${HOST_INT_IP}" > /etc/hostname.bridge0
+# 再起動時も自動設定されるよう hostname.* を書いておく (パーミッション 640 必須)
+_log "hostname.vether0/bridge0/vether1/bridge1 を書き込み..."
+printf 'inet %s 255.255.255.0\nup\n' "${HOST_INT_IP}" > /etc/hostname.vether0
+chmod 640 /etc/hostname.vether0
+printf 'add vether0\nup\n' > /etc/hostname.bridge0
 chmod 640 /etc/hostname.bridge0
-
-_log "/etc/hostname.bridge1 を書き込み (640)..."
-printf 'inet %s netmask 255.255.255.0\ndescription "dev_lan gateway"\nup\n' \
-    "${HOST_DEV_IP}" > /etc/hostname.bridge1
+printf 'inet %s 255.255.255.0\nup\n' "${HOST_DEV_IP}" > /etc/hostname.vether1
+chmod 640 /etc/hostname.vether1
+printf 'add vether1\nup\n' > /etc/hostname.bridge1
 chmod 640 /etc/hostname.bridge1
 
-_ok "bridge0 (${HOST_INT_IP}) / bridge1 (${HOST_DEV_IP}) 設定"
+_ok "vether0+bridge0 (${HOST_INT_IP}) / vether1+bridge1 (${HOST_DEV_IP}) 設定"
 
 # vmd をスイッチのみの最小 config で起動する
 # ディスクイメージ参照を含む完全な vm.conf は STEP 3 で配置する
@@ -295,15 +309,24 @@ set block-policy drop
 set skip on lo0
 block all
 
+# keep state を明示する。
+# flags S/SA のみでは stateful tracking が確立されず、戻りパケットが落ちる。
+
 # SSH: 管理アクセスを維持 (Yubikey セットアップ完了まで維持する §yubikey-setup.sh)
-pass in on ${WAN_IF} proto tcp to port 22
+pass in on ${WAN_IF} proto tcp to port 22 keep state
 
 # VM ↔ ホスト: DHCP / HTTP (autoinstall) + SSH (プロビジョニング)
-pass on bridge0 all
-pass on bridge1 all
+# bridge0/1 = 手動生成スイッチ, veb0/1 = vmd 自動生成スイッチ (両方許可)
+# vether0/1 = ホスト IP (VM-ホスト通信)
+pass on bridge0 all keep state
+pass on bridge1 all keep state
+pass on veb0    all keep state
+pass on veb1    all keep state
+pass on vether0 all keep state
+pass on vether1 all keep state
 
 # VM → インターネット: インストールセット取得のみ
-pass out on ${WAN_IF} all
+pass out on ${WAN_IF} all keep state
 PFEOF
 _log "pfctl -s rules:"
 pfctl -s rules 2>/dev/null | while read -r l; do _log "  $l"; done
@@ -373,8 +396,15 @@ subnet 10.0.2.0 netmask 255.255.255.0 {
     next-server ${HOST_DEV_IP};
 }
 DHCP
-rcctl set dhcpd flags "-c /tmp/dhcpd-prov.conf bridge0 bridge1"
-rcctl start dhcpd 2>/dev/null || rcctl restart dhcpd
+# dhcpd は IP を持つ vether 上で listen する (bridge は L2 スイッチのみで IP なし)
+# rcctl restart は "enabled" なサービスにしか使えない。
+# STEP 7 で disable されている再実行時のために enable → stop(安全) → start の順にする。
+_log "dhcpd を enable → flags 設定 → 起動..."
+rcctl enable dhcpd
+rcctl set dhcpd flags "-c /tmp/dhcpd-prov.conf vether0 vether1"
+rcctl stop dhcpd 2>/dev/null || true   # 再実行時の既存インスタンスを停止
+rcctl start dhcpd
+_log "dhcpd PID: $(pgrep -x dhcpd || echo '不明')"
 
 install -d /tmp/owl-install-www
 cat > /tmp/httpd-prov.conf <<HTTP
@@ -385,8 +415,12 @@ server "prov" {
     directory auto index
 }
 HTTP
+_log "httpd を enable → flags 設定 → 起動..."
+rcctl enable httpd
 rcctl set httpd flags "-f /tmp/httpd-prov.conf"
-rcctl start httpd 2>/dev/null || rcctl restart httpd
+rcctl stop httpd 2>/dev/null || true   # 再実行時の既存インスタンスを停止
+rcctl start httpd
+_log "httpd PID: $(pgrep -x httpd || echo '不明')"
 _ok "DHCP / HTTP サーバー起動"
 
 # ── STEP 5: VM OS インストール (autoinstall) ─────────────
