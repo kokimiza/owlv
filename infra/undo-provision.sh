@@ -12,7 +12,7 @@
 #
 # 【このスクリプトが巻き戻すもの】
 #   STEP 1: 管理スクリプト / 設定ファイル / owl-control ユーザー
-#   STEP 2: veb IP / PF ルール / IP フォワーディング
+#   STEP 2: bridge IP / PF ルール / IP フォワーディング
 #   STEP 3: VM ディスクイメージ (--wipe 時のみ)
 #   STEP 4: SSH 鍵 (プロビジョニング鍵・バックアップ鍵)
 #   STEP 5: autoinstall サーバー残骸
@@ -109,13 +109,13 @@ _ok "/etc/crontab をリセット"
 # ── STEP 2: 仮想ネットワーク ──────────────────────────────
 _log "STEP 2: 仮想ネットワークを解除"
 
-# vmd を停止・無効化 (veb0/1 がここで消える)
+# vmd を停止・無効化 (bridge0/1 がここで消える)
 rcctl stop  vmd 2>/dev/null && _ok "vmd 停止" || _skip "vmd (既に停止)"
 rcctl disable vmd 2>/dev/null || true
 
-# veb インターフェース設定ファイルを削除
-rm -f /etc/hostname.veb0 /etc/hostname.veb1
-_ok "hostname.veb{0,1} 削除"
+# bridge インターフェース設定ファイルを削除
+rm -f /etc/hostname.bridge0 /etc/hostname.bridge1
+_ok "hostname.bridge{0,1} 削除"
 
 # IP フォワーディングを無効化
 sysctl net.inet.ip.forwarding=0 2>/dev/null && _ok "IP フォワーディング無効" || true

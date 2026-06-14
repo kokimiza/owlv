@@ -74,22 +74,45 @@
 set -eu
 trap '_on_exit $?' EXIT
 
+# ── ヘルパー関数 ───────────────────────────────────────────
+# 関数はログ設定より先に定義する (trap 発火時に未定義にならないよう)
+
 _on_exit() {
     local rc=$1
     if [ "$rc" -ne 0 ]; then
+        printf '[%s] エラー終了 (exit %s)\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$rc"
         echo ""
         echo "エラー終了 (exit $rc)。PF ルールを安全な暫定状態に維持します。"
+        echo "ログ: ${LOGFILE:-'(未設定)'}"
         echo "再実行: sh /etc/owl/infra/provision.sh"
+    else
+        printf '[%s] プロビジョニング正常終了\n' "$(date '+%Y-%m-%d %H:%M:%S')"
     fi
 }
 
-_die()  { echo "エラー: $*" >&2; exit 1; }
+_die()  { printf '[%s] FATAL: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2; exit 1; }
 _step() { printf '\n━━━ [%s/%s] %s\n' "$1" "$TOTAL" "$2"; }
-_ok()   { echo "    ✓ $*"; }
-_info() { echo "      $*"; }
+_ok()   { printf '    ✓ %s\n' "$*"; }
+_info() { printf '      %s\n' "$*"; }
+_log()  { printf '    [%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
+
+# ── ログファイル ───────────────────────────────────────────
+# OpenBSD /bin/sh (pdksh 派生) はプロセス置換 >(cmd) 未サポート。
+# named pipe + バックグラウンド tee で端末とファイルに同時出力する。
+mkdir -p /var/log/owl
+LOGFILE="/var/log/owl/provision-$(date +%Y%m%d-%H%M%S).log"
+_LOGPIPE="/tmp/owl-prov-$$.pipe"
+mkfifo -m 600 "$_LOGPIPE"
+tee -a "$LOGFILE" < "$_LOGPIPE" &
+exec > "$_LOGPIPE" 2>&1
+rm -f "$_LOGPIPE"   # 名前を消してもプロセス間の fd は維持される
+printf '[%s] ログ出力先: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$LOGFILE"
 
 [ "$(id -u)" -eq 0 ] || _die "root で実行してください"
 [ "$(uname)" = "OpenBSD" ] || _die "OpenBSD でのみ実行可能"
+
+_log "OS: $(uname -srm)  カーネル: $(sysctl -n kern.version | head -1)"
+_log "ホスト: $(hostname)"
 
 SELF="$(cd "$(dirname "$0")" && pwd)"
 CONFIG="${SELF}/owl-config.toml"
@@ -121,6 +144,13 @@ PG_VERSION=$(_toml   "app"                 "pg_version")
 FORGEJO_VER=$(_toml  "forgejo"             "version")
 OBD_MIRROR=$(_toml   "install"             "openbsd_mirror")
 
+_log "設定読み込み完了:"
+_log "  OWL_RELEASE=${OWL_RELEASE}  WAN_IF=${WAN_IF}"
+_log "  internal_lan: AP=${OWL_AP_IP} DB=${OWL_DB_IP}"
+_log "  dev_lan:      Git=${OWL_GIT_IP} Build=${OWL_BUILD_IP}"
+_log "  GHC=${GHC_VERSION}  PG=${PG_VERSION}  Forgejo=${FORGEJO_VER}"
+_log "  mirror=${OBD_MIRROR}"
+
 HOST_INT_IP="10.0.1.1"
 HOST_DEV_IP="10.0.2.1"
 PROV_KEY=/etc/owl/prov_ed25519      # プロビジョニング用の使い捨て SSH 鍵
@@ -132,7 +162,7 @@ export OWL_AP_IP OWL_DB_IP OWL_GIT_IP OWL_BUILD_IP \
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo " owlv プロビジョニング (OpenBSD ${OWL_RELEASE})"
+echo " owlv プロビジョニング! (OpenBSD ${OWL_RELEASE})"
 echo " AP:${OWL_AP_IP}  DB:${OWL_DB_IP}"
 echo " Git:${OWL_GIT_IP}  Build:${OWL_BUILD_IP}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -167,51 +197,96 @@ id owl-control >/dev/null 2>&1 || useradd -s /sbin/nologin -d /nonexistent owl-c
 pkg_add age rclone 2>/dev/null && _ok "age / rclone インストール" || \
     _info "警告: age / rclone の自動インストール失敗。後で手動実行: pkg_add age rclone"
 
-# veb インターフェースは vmd より先に作成する必要がある
-# (vmd.conf の switch interface 参照が起動時に検証されるため)
-ifconfig veb0 create 2>/dev/null || true
-ifconfig veb1 create 2>/dev/null || true
-_ok "veb0 / veb1 作成"
+# ── bridge 設定 ──────────────────────────────────────────────
+# 再実行時は vmd がすでに bridge を保持しており SIOCAIFADDR が失敗する。
+# vmd を先に停止してから bridge を設定し、後で再起動する。
+_log "vmd の実行状態を確認..."
+if pgrep -x vmd >/dev/null 2>&1; then
+    _log "vmd が実行中 → bridge 再設定のため停止します"
+    rcctl stop vmd 2>/dev/null || true
+    sleep 1
+    if pgrep -x vmd >/dev/null 2>&1; then
+        _die "vmd を停止できませんでした。手動で 'rcctl stop vmd' を実行してください"
+    fi
+    _log "vmd 停止完了"
+else
+    _log "vmd は未起動"
+fi
+
+# vmd が以前使用した bridge は内部状態が残り SIOCAIFADDR を拒否するため
+# 必ず destroy → create でリセットしてから IP を付与する。
+_log "bridge0 を destroy → create でリセット..."
+ifconfig bridge0 destroy 2>/dev/null && _log "bridge0 destroy 完了" || _log "bridge0 は存在しなかった"
+ifconfig bridge0 create
+_log "bridge0 作成完了"
+
+_log "bridge1 を destroy → create でリセット..."
+ifconfig bridge1 destroy 2>/dev/null && _log "bridge1 destroy 完了" || _log "bridge1 は存在しなかった"
+ifconfig bridge1 create
+_log "bridge1 作成完了"
+
+# netmask キーワードを明示して dest_address との曖昧さを排除する
+_log "bridge0 に inet ${HOST_INT_IP} netmask 255.255.255.0 up を設定..."
+ifconfig bridge0 inet "${HOST_INT_IP}" netmask 255.255.255.0 up \
+    || _die "bridge0 への IP 設定失敗 (ifconfig bridge0 inet)"
+_log "bridge0 状態: $(ifconfig bridge0 | grep 'inet ')"
+
+_log "bridge1 に inet ${HOST_DEV_IP} netmask 255.255.255.0 up を設定..."
+ifconfig bridge1 inet "${HOST_DEV_IP}" netmask 255.255.255.0 up \
+    || _die "bridge1 への IP 設定失敗 (ifconfig bridge1 inet)"
+_log "bridge1 状態: $(ifconfig bridge1 | grep 'inet ')"
+
+# 再起動時も自動設定されるよう hostname.bridge* を書いておく (netstart 用)
+# パーミッション 640 = netstart の "insecure" 警告を抑制
+_log "/etc/hostname.bridge0 を書き込み (640)..."
+printf 'inet %s netmask 255.255.255.0\ndescription "internal_lan gateway"\nup\n' \
+    "${HOST_INT_IP}" > /etc/hostname.bridge0
+chmod 640 /etc/hostname.bridge0
+
+_log "/etc/hostname.bridge1 を書き込み (640)..."
+printf 'inet %s netmask 255.255.255.0\ndescription "dev_lan gateway"\nup\n' \
+    "${HOST_DEV_IP}" > /etc/hostname.bridge1
+chmod 640 /etc/hostname.bridge1
+
+_ok "bridge0 (${HOST_INT_IP}) / bridge1 (${HOST_DEV_IP}) 設定"
 
 # vmd をスイッチのみの最小 config で起動する
 # ディスクイメージ参照を含む完全な vm.conf は STEP 3 で配置する
+_log "最小 vm.conf (スイッチ定義のみ) を書き込み..."
 cat > /etc/vm.conf <<'VMDEOF'
 switch "internal_lan" {
-    interface veb0
+    interface bridge0
 }
 switch "dev_lan" {
-    interface veb1
+    interface bridge1
 }
 VMDEOF
+
+_log "vmd を enable + start..."
 rcctl enable vmd
 if ! rcctl start vmd 2>/dev/null; then
-    _info "vmd エラー詳細:"
-    grep -i vmd /var/log/messages | tail -5 | while read -r l; do _info "  $l"; done
+    _log "vmd 起動失敗 — /var/log/messages の直近ログ:"
+    grep -i vmd /var/log/messages | tail -10 | while read -r l; do _log "  $l"; done
     _die "vmd の起動に失敗しました"
 fi
 sleep 1
+_log "vmd PID: $(pgrep -x vmd || echo '不明')"
+_log "vmctl status:"
+vmctl status 2>/dev/null | while read -r l; do _log "  $l"; done
 _ok "vmd 起動 (スイッチのみ)"
 
 # ── STEP 2: 仮想ネットワーク ──────────────────────────────
 _step 2 "仮想ネットワーク設定"
 
-# ホストを両 LAN のゲートウェイとして設定
-cat > /etc/hostname.veb0 <<EOF
-inet ${HOST_INT_IP} 255.255.255.0
-description "internal_lan gateway"
-EOF
-cat > /etc/hostname.veb1 <<EOF
-inet ${HOST_DEV_IP} 255.255.255.0
-description "dev_lan gateway"
-EOF
-ifconfig veb0 inet "${HOST_INT_IP}" 255.255.255.0 up
-ifconfig veb1 inet "${HOST_DEV_IP}" 255.255.255.0 up
-_ok "veb0 (${HOST_INT_IP}) / veb1 (${HOST_DEV_IP}) 設定"
-
 # VM がミラーからインストールセットを取得できるよう IP フォワーディング + NAT を有効化
 # (本番封鎖は STEP 7 で適用するため、ここでは最小限のルールのみ)
+_log "IP フォワーディングを有効化..."
 sysctl net.inet.ip.forwarding=1
-cat | pfctl -f - <<PFEOF
+_log "暫定 PF ルールを適用 (NAT: VM → WAN)..."
+# 注意: `cat | pfctl -f - <<PFEOF` は NG。
+#   ヒアドキュメントは右辺 (pfctl) に渡るが left の cat は端末 stdin を待ちフリーズする。
+#   正しくは pfctl に直接ヒアドキュメントを渡す。
+pfctl -f - <<PFEOF
 # プロビジョニング中の暫定 PF ルール
 # NAT: VM → インターネット (OpenBSD ミラーからインストールセットを取得)
 match out on ${WAN_IF} from { 10.0.1.0/24, 10.0.2.0/24 } nat-to (${WAN_IF})
@@ -224,49 +299,65 @@ block all
 pass in on ${WAN_IF} proto tcp to port 22
 
 # VM ↔ ホスト: DHCP / HTTP (autoinstall) + SSH (プロビジョニング)
-pass on veb0 all
-pass on veb1 all
+pass on bridge0 all
+pass on bridge1 all
 
 # VM → インターネット: インストールセット取得のみ
 pass out on ${WAN_IF} all
 PFEOF
+_log "pfctl -s rules:"
+pfctl -s rules 2>/dev/null | while read -r l; do _log "  $l"; done
 _ok "暫定 PF (NAT) 適用"
 
 # ── STEP 3: VM ディスクイメージ作成 ──────────────────────
 _step 3 "VM ディスクイメージ作成"
+_log "ディスクイメージディレクトリ: /var/vmm"
 install -d /var/vmm
 for spec in "ap:20G" "db:50G" "git:50G" "build:50G"; do
     name="${spec%%:*}"; size="${spec##*:}"; img="/var/vmm/${name}.img"
     if [ ! -f "$img" ]; then
+        _log "${name}.img (${size}) を作成中..."
         vmctl create -s "$size" "$img" && _ok "${name}.img (${size}) 作成"
     else
+        _log "${name}.img 既存 ($(du -h "$img" | cut -f1)) → スキップ"
         _info "${name}.img 既存のためスキップ"
     fi
 done
 
-# ディスクイメージが揃ったので完全な vm.conf を配置して reload
+_log "完全な vm.conf を配置..."
 install -m 600 "${SELF}/host/vmd.conf" /etc/vm.conf
-vmctl reload 2>/dev/null || rcctl restart vmd
+_log "vmctl reload..."
+if vmctl reload 2>/dev/null; then
+    _log "vmctl reload 成功"
+else
+    _log "vmctl reload 失敗 → rcctl restart vmd にフォールバック"
+    rcctl restart vmd
+fi
 _ok "vm.conf (VM 定義込み) を配置・reload"
 
 # ── STEP 4: SSH 鍵生成 ────────────────────────────────────
 _step 4 "SSH 鍵生成"
 
 # プロビジョニング用の使い捨て鍵 (STEP 7 で削除)
+_log "プロビジョニング鍵を生成: ${PROV_KEY}"
 ssh-keygen -t ed25519 -N "" -C "owl-prov-$(date +%Y%m%d)" -f "$PROV_KEY" -q
 chmod 600 "$PROV_KEY"
 PROV_PUBKEY="$(cat ${PROV_KEY}.pub)"
+_log "プロビジョニング公開鍵: ${PROV_PUBKEY}"
 _ok "プロビジョニング鍵: ${PROV_KEY}"
 
 # DR バックアップ用の恒久鍵 (owl-control.sh が VM に SSH するために使用)
 if [ ! -f "$BACKUP_KEY" ]; then
+    _log "DR バックアップ鍵を新規生成: ${BACKUP_KEY}"
     ssh-keygen -t ed25519 -N "" -C "owl-backup" -f "$BACKUP_KEY" -q
     chmod 600 "$BACKUP_KEY"
     _ok "DR バックアップ鍵: ${BACKUP_KEY} (各 VM の authorized_keys に追加される)"
 else
+    _log "DR バックアップ鍵: ${BACKUP_KEY} 既存 → 再利用"
     _info "DR バックアップ鍵: ${BACKUP_KEY} 既存のため再利用"
 fi
 BACKUP_PUBKEY="$(cat ${BACKUP_KEY}.pub)"
+_log "バックアップ公開鍵: ${BACKUP_PUBKEY}"
 
 # autoinstall サーバー (dhcpd + httpd)
 cat > /tmp/dhcpd-prov.conf <<DHCP
@@ -282,7 +373,7 @@ subnet 10.0.2.0 netmask 255.255.255.0 {
     next-server ${HOST_DEV_IP};
 }
 DHCP
-rcctl set dhcpd flags "-c /tmp/dhcpd-prov.conf veb0 veb1"
+rcctl set dhcpd flags "-c /tmp/dhcpd-prov.conf bridge0 bridge1"
 rcctl start dhcpd 2>/dev/null || rcctl restart dhcpd
 
 install -d /tmp/owl-install-www
@@ -307,6 +398,7 @@ _vm_install() {
     local vmname="$1" vmip="$2" gateway="$3"
 
     _info "-- ${vmname} (${vmip})"
+    _log "[${vmname}] install.conf を生成 (gateway=${gateway})..."
 
     # install.conf を動的生成して httpd のルートに置く
     # VM の installer が http://<gateway>/install.conf を取得する
@@ -336,15 +428,22 @@ EOF
     # bsd.rd で起動 (disk / memory は vm.conf から読む)
     local bsdrd="/var/vmm/bsd.rd-${OWL_RELEASE}"
     if [ ! -f "$bsdrd" ]; then
+        _log "[${vmname}] bsd.rd-${OWL_RELEASE} を取得中..."
         _info "    bsd.rd を取得中..."
         ftp -o "$bsdrd" \
             "https://${OBD_MIRROR}/pub/OpenBSD/${OWL_RELEASE}/amd64/bsd.rd" \
             || _die "bsd.rd の取得に失敗しました"
+        _log "[${vmname}] bsd.rd 取得完了: $(du -h "$bsdrd" | cut -f1)"
+    else
+        _log "[${vmname}] bsd.rd-${OWL_RELEASE} 既存 → 再利用"
     fi
 
+    _log "[${vmname}] vmctl start -b $bsdrd $vmname"
     vmctl start -b "$bsdrd" "$vmname"
     _info "    インストール中 (数分かかります)..."
+    _log "[${vmname}] SSH 待機開始 (最大 10 分)..."
     _wait_ssh "$vmip"
+    _log "[${vmname}] SSH 接続確認完了"
     _ok "${vmname} インストール完了"
 }
 
@@ -352,10 +451,19 @@ _wait_ssh() {
     local ip="$1"
     local n=0
     while [ "$n" -lt 120 ]; do
-        ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=4 \
-            -o BatchMode=yes "root@${ip}" true 2>/dev/null && return 0
-        n=$((n + 1)); sleep 5
+        if ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=4 \
+               -o BatchMode=yes "root@${ip}" true 2>/dev/null; then
+            return 0
+        fi
+        n=$((n + 1))
+        # 30 秒ごとに進捗ログ
+        if [ $((n % 6)) -eq 0 ]; then
+            _log "  SSH 待機中 ${ip} ... $((n * 5)) 秒経過 / 600 秒"
+        fi
+        sleep 5
     done
+    _log "SSH タイムアウト — vmctl status:"
+    vmctl status 2>/dev/null | while read -r l; do _log "  $l"; done
     _die "${ip} への SSH がタイムアウト (10 分)"
 }
 
@@ -370,19 +478,25 @@ _step 6 "VM 内部プロビジョニング"
 _vm_provision() {
     local vmname="$1" vmip="$2"
     _info "-- ${vmname} (${vmip})"
+    _log "[${vmname}] プロビジョニング開始"
 
     # VM のホスト鍵を known_hosts に記録する (owl-control.sh で StrictHostKeyChecking=yes に使用)
+    _log "[${vmname}] ホスト鍵を ssh-keyscan で取得..."
     ssh-keyscan -T 10 "$vmip" >> /etc/owl/known_hosts 2>/dev/null
     _info "    ホスト鍵を /etc/owl/known_hosts に記録"
 
     # スクリプトと設定ファイルを VM に転送
+    _log "[${vmname}] /provision ディレクトリを作成..."
     ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no "root@${vmip}" \
         "install -d /provision"
+    _log "[${vmname}] ${SELF}/${vmname}/ を VM に転送..."
     scp -i "$PROV_KEY" -o StrictHostKeyChecking=no -rq \
         "${SELF}/${vmname}/" "${SELF}/owl-config.toml" \
         "root@${vmip}:/provision/"
+    _log "[${vmname}] 転送完了"
 
     # DR バックアップ鍵を authorized_keys に追加 (owl-control.sh 用)
+    _log "[${vmname}] DR バックアップ鍵を authorized_keys に追加..."
     ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no "root@${vmip}" \
         "install -d -m 700 /root/.ssh
          grep -qF '${BACKUP_PUBKEY}' /root/.ssh/authorized_keys 2>/dev/null || \
@@ -390,19 +504,23 @@ _vm_provision() {
          chmod 600 /root/.ssh/authorized_keys"
 
     # setup.sh を実行
+    _log "[${vmname}] setup.sh を実行中..."
     ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no "root@${vmip}" \
         "OWL_AP_IP='${OWL_AP_IP}' OWL_DB_IP='${OWL_DB_IP}' \
          OWL_GIT_IP='${OWL_GIT_IP}' OWL_BUILD_IP='${OWL_BUILD_IP}' \
          OWL_RELEASE='${OWL_RELEASE}' GHC_VERSION='${GHC_VERSION}' \
          PG_VERSION='${PG_VERSION}' FORGEJO_VERSION='${FORGEJO_VER}' \
          sh /provision/${vmname}/setup.sh"
+    _log "[${vmname}] setup.sh 完了"
 
     # プロビジョニング用の使い捨て鍵を VM から削除
+    _log "[${vmname}] プロビジョニング鍵を VM から削除..."
     ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no "root@${vmip}" "
         grep -v 'owl-prov-' /root/.ssh/authorized_keys > /root/.ssh/ak.tmp || true
         mv /root/.ssh/ak.tmp /root/.ssh/authorized_keys
         chmod 600 /root/.ssh/authorized_keys
     "
+    _log "[${vmname}] プロビジョニング完了"
     _ok "${vmname} 完了"
 }
 
@@ -415,6 +533,7 @@ _vm_provision "vm-ap"    "$OWL_AP_IP"
 _step 7 "本番封鎖"
 
 # DHCP / HTTP プロビジョニングサーバーを停止
+_log "DHCP / HTTP プロビジョニングサーバーを停止..."
 rcctl stop dhcpd 2>/dev/null || true
 rcctl stop httpd 2>/dev/null || true
 rcctl disable dhcpd 2>/dev/null || true
@@ -423,21 +542,28 @@ rm -rf /tmp/owl-install-www /tmp/dhcpd-prov.conf /tmp/httpd-prov.conf
 _ok "プロビジョニングサーバー停止"
 
 # プロビジョニング用の使い捨て鍵を削除
+_log "プロビジョニング SSH 鍵を削除: ${PROV_KEY}"
 rm -f "$PROV_KEY" "${PROV_KEY}.pub"
 _ok "プロビジョニング SSH 鍵削除"
 
 # IP フォワーディング無効化 + 本番 PF ルール適用
 # sshd は pf.conf で通過させているのでロックアウトしない
 # Yubikey 未着のため pf.conf の SSH pass ルールは現時点で有効
+_log "IP フォワーディングを無効化..."
 sysctl net.inet.ip.forwarding=0
+_log "本番 pf.conf を配置して適用..."
 install -m 600 "${SELF}/host/pf.conf"       /etc/pf.conf
 install -m 644 "${SELF}/host/rc.conf.local" /etc/rc.conf.local
 pfctl -f /etc/pf.conf
+_log "pfctl -s rules:"
+pfctl -s rules 2>/dev/null | while read -r l; do _log "  $l"; done
 _ok "本番 PF 適用 (NAT 解除・封鎖)"
 
 # 改ざん検知ベースライン記録 (§5)
+_log "改ざん検知ベースラインを計算中..."
 find /etc /usr/local/sbin -type f 2>/dev/null | sort \
     | xargs sha256 > /etc/owl/integrity-baseline.sha256
+_log "ベースライン: $(wc -l < /etc/owl/integrity-baseline.sha256) ファイルを記録"
 _ok "改ざん検知ベースライン記録"
 
 # age 受信者公開鍵の確認
