@@ -11,7 +11,7 @@ if ! dmesg | grep -q 'vmm0 at mainbus0'; then
     _die "vmm(4) ドライバーが見つかりません。\n  原因: CPU が仮想化非対応、または BIOS で Intel VT-x / AMD-V が無効です。\n  対処: BIOS/UEFI で VT-x (Intel) または SVM (AMD) を有効にして再起動してください。"
 fi
 _info "install.conf を自動生成し、1 台ずつ順番にインストールします。"
-_info "インストールセットは ${OBD_MIRROR} から取得します。"
+_info "インストールセットは ${SELF}/sets/ から取得します。"
 _info "インストーラー起動メモリ: 512M (-m オプション; vm.conf の本番値とは別)"
 
 _vm_install() {
@@ -41,33 +41,14 @@ Which disk is the root disk = sd0
 Use (W)hole disk MBR, whole disk (G)PT or (E)dit? = gpt
 Set name(s) = -x* -game* -man* done
 Location of sets = http
-HTTP Server = ${OBD_MIRROR}
-Server directory = pub/OpenBSD/${OWL_RELEASE}/amd64
+HTTP Server = ${gateway}
+Server directory = /sets
 EOF
 
-    # bsd.rd で起動
-    # インストーラーは 512M で十分動く。インストール完了後はいったん停止し、
-    # 本番 vm.conf を適用してから通常メモリで起動し直す。
-    local bsdrd="/var/vmm/bsd.rd-${OWL_RELEASE}"
+    # bsd.rd はダウンロードせず infra/sets/ に置かれたものを使う (なければ即エラー)
+    local bsdrd="${SELF}/sets/bsd.rd"
     local inst_mem="512M"
-    # 途中で切れた bsd.rd を検出して再取得する。
-    # OpenBSD 7.9 amd64 の bsd.rd は約 4.6MB なので、10MB 閾値は誤判定になる。
-    if [ -f "$bsdrd" ] && [ "$(wc -c < "$bsdrd" | tr -d ' ')" -lt 1000000 ]; then
-        _log "[${vmname}] bsd.rd 破損検出 ($(du -h "$bsdrd" | cut -f1)) → 削除して再取得"
-        rm -f "$bsdrd"
-    fi
-    if [ ! -f "$bsdrd" ]; then
-        _log "[${vmname}] bsd.rd-${OWL_RELEASE} を取得中..."
-        _info "    bsd.rd を取得中..."
-        ftp -o "$bsdrd" \
-            "https://${OBD_MIRROR}/pub/OpenBSD/${OWL_RELEASE}/amd64/bsd.rd" \
-            || _die "bsd.rd の取得に失敗しました"
-        _log "[${vmname}] bsd.rd 取得完了: $(du -h "$bsdrd" | cut -f1)"
-    else
-        _log "[${vmname}] bsd.rd-${OWL_RELEASE} 既存 ($(du -h "$bsdrd" | cut -f1)) → 再利用"
-    fi
-    chmod 644 "$bsdrd"
-    chown root:wheel "$bsdrd" 2>/dev/null || true
+    [ -f "$bsdrd" ] || _die "bsd.rd が見つかりません: ${bsdrd}"
     _log "[${vmname}] bsd.rd: $(ls -l "$bsdrd")"
     _log "[${vmname}] disk:   $(ls -l "$disk")"
 

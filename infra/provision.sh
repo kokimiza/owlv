@@ -212,14 +212,11 @@ OWL_BUILD_IP=$(_toml "network.dev_lan"     "build_vm")
 GHC_VERSION=$(_toml  "toolchain"           "ghc_version")
 PG_VERSION=$(_toml   "app"                 "pg_version")
 FORGEJO_VER=$(_toml  "forgejo"             "version")
-OBD_MIRROR=$(_toml   "install"             "openbsd_mirror")
-
 _log "設定読み込み完了:"
 _log "  OWL_RELEASE=${OWL_RELEASE}  WAN_IF=${WAN_IF}"
 _log "  internal_lan: AP=${OWL_AP_IP} DB=${OWL_DB_IP}"
 _log "  dev_lan:      Git=${OWL_GIT_IP} Build=${OWL_BUILD_IP}"
 _log "  GHC=${GHC_VERSION}  PG=${PG_VERSION}  Forgejo=${FORGEJO_VER}"
-_log "  mirror=${OBD_MIRROR}"
 
 HOST_INT_IP="10.0.1.1"
 HOST_DEV_IP="10.0.2.1"

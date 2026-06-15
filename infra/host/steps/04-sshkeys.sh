@@ -50,6 +50,11 @@ _log "dhcpd PID: $(pgrep -x dhcpd || echo '不明')"
 
 # httpd は /var/www に chroot するため root は chroot 内のパスで指定する
 install -d /var/www/htdocs
+# インストールセットを httpd chroot 内に nullfs マウントする (コピー不要)
+[ -d "${SELF}/sets" ] || _die "インストールセットが見つかりません: ${SELF}/sets\n  事前に scp -r infra/sets <host>:/etc/owl/infra/ してください"
+[ -f "${SELF}/sets/bsd.rd" ] || _die "bsd.rd が見つかりません: ${SELF}/sets/bsd.rd"
+install -d /var/www/htdocs/sets
+mount_nullfs "${SELF}/sets" /var/www/htdocs/sets
 cat > /tmp/httpd-prov.conf <<HTTP
 server "prov" {
     listen on ${HOST_INT_IP} port 80

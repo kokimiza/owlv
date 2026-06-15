@@ -7,6 +7,7 @@ rcctl stop dhcpd 2>/dev/null || true
 rcctl stop httpd 2>/dev/null || true
 rcctl disable dhcpd 2>/dev/null || true
 rcctl disable httpd 2>/dev/null || true
+umount /var/www/htdocs/sets 2>/dev/null || true
 rm -f /var/www/htdocs/install.conf /tmp/dhcpd-prov.conf /tmp/httpd-prov.conf
 _ok "プロビジョニングサーバー停止"
 
