@@ -13,25 +13,37 @@ _vm_provision() {
 
     # スクリプトと設定ファイルを VM に転送
     _log "[${vmname}] /provision ディレクトリを作成..."
-    ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no "root@${vmip}" \
+    ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
         "install -d /provision"
     _log "[${vmname}] ${SELF}/${vmname}/ を VM に転送..."
-    scp -i "$PROV_KEY" -o StrictHostKeyChecking=no -rq \
+    scp -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -rq \
         "${SELF}/${vmname}/" "${SELF}/owl-config.toml" \
         "root@${vmip}:/provision/"
     _log "[${vmname}] 転送完了"
 
     # DR バックアップ鍵を authorized_keys に追加 (owl-control.sh 用)
     _log "[${vmname}] DR バックアップ鍵を authorized_keys に追加..."
-    ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no "root@${vmip}" \
+    ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
         "install -d -m 700 /root/.ssh
          grep -qF '${BACKUP_PUBKEY}' /root/.ssh/authorized_keys 2>/dev/null || \
              echo '${BACKUP_PUBKEY}' >> /root/.ssh/authorized_keys
          chmod 600 /root/.ssh/authorized_keys"
 
+    # autoinstall が DNS を gateway (ホスト) に設定するが、ホストに DNS フォワーダーがないため
+    # 外部名前解決できない。pkg_add の前に外部リゾルバーへ切り替える。
+    _log "[${vmname}] DNS を外部リゾルバーへ設定..."
+    ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
+        "echo 'nameserver 1.1.1.1' > /etc/resolv.conf"
+
+    # autoinstall が /etc/installurl をプロビジョニングサーバー (10.0.x.1/sets) に
+    # 設定してしまうため、pkg_add の前に公式 CDN ミラーへ上書きする
+    _log "[${vmname}] installurl を CDN ミラーへ更新..."
+    ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
+        "echo 'https://cdn.openbsd.org/pub/OpenBSD/' > /etc/installurl"
+
     # setup.sh を実行
     _log "[${vmname}] setup.sh を実行中..."
-    ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no "root@${vmip}" \
+    ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
         "OWL_AP_IP='${OWL_AP_IP}' OWL_DB_IP='${OWL_DB_IP}' \
          OWL_GIT_IP='${OWL_GIT_IP}' OWL_BUILD_IP='${OWL_BUILD_IP}' \
          OWL_RELEASE='${OWL_RELEASE}' GHC_VERSION='${GHC_VERSION}' \
@@ -41,7 +53,7 @@ _vm_provision() {
 
     # プロビジョニング用の使い捨て鍵を VM から削除
     _log "[${vmname}] プロビジョニング鍵を VM から削除..."
-    ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no "root@${vmip}" "
+    ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" "
         grep -v 'owl-prov-' /root/.ssh/authorized_keys > /root/.ssh/ak.tmp || true
         mv /root/.ssh/ak.tmp /root/.ssh/authorized_keys
         chmod 600 /root/.ssh/authorized_keys
