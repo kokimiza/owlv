@@ -43,6 +43,7 @@ Set name(s) = -x* -game* -man* done
 Location of sets = http
 HTTP Server = ${gateway}
 Server directory = /sets
+Fetching of BUILDINFO failed. Continue anyway? = yes
 EOF
 
     # bsd.rd はダウンロードせず infra/sets/ に置かれたものを使う (なければ即エラー)
