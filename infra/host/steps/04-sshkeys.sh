@@ -54,7 +54,7 @@ install -d /var/www/htdocs
 [ -d "${SELF}/sets" ] || _die "インストールセットが見つかりません: ${SELF}/sets\n  事前に scp -r infra/sets <host>:/etc/owl/infra/ してください"
 [ -f "${SELF}/sets/bsd.rd" ] || _die "bsd.rd が見つかりません: ${SELF}/sets/bsd.rd"
 install -d /var/www/htdocs/sets
-mount_nullfs "${SELF}/sets" /var/www/htdocs/sets
+mount_null "${SELF}/sets" /var/www/htdocs/sets
 cat > /tmp/httpd-prov.conf <<HTTP
 server "prov" {
     listen on ${HOST_INT_IP} port 80

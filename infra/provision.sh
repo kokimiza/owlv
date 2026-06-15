@@ -51,18 +51,19 @@
 # 5. 時刻を合わせる (OCSP 検証が通らなくなるため必須):
 #      ssh <YOUR_USERNAME>@192.168.50.200 'doas rdate -n pool.ntp.org'
 #
-#    macOS Sequoia 以降は rsync が openrsync に置き換わっており、OpenBSD 側の
-#    openrsync と --delete 系フラグの互換性がない。scp -r を使うこと。
+#    macOS / OpenBSD どちらも openrsync を使う。
+#    初回のみホスト側に openrsync を入れる (SSH ログイン後 1 回だけ):
+#      doas pkg_add rsync
 #
-#   # (1) infra ディレクトリごと /tmp/ に転送 → /tmp/infra/ になる
-#   scp -r infra <YOUR_USERNAME>@192.168.50.200:/tmp/
+#   # (1) infra を /tmp/infra/ に同期 (初回以降は sets/ は除外)
+#   rsync -av --progress --exclude='sets/' infra/ <YOUR_USERNAME>@192.168.50.200:/tmp/infra/
 #
 #   # (2) SSH ログイン後、/etc/owl/ に配置して実行
 #   ssh <YOUR_USERNAME>@192.168.50.200
-#   doas rm -rf /etc/owl/ && doas mv /tmp/infra/ /etc/owl/
+#   doas rm -rf /etc/owl/ && doas cp -r /tmp/infra/ /etc/owl/
 #   doas sh /etc/owl/provision.sh
 #
-#   ※ 再実行時は同じ手順。/etc/owl/ ごと上書きするので古い残骸は自動的に消える。
+#   ※ 再実行時は rsync だけ打てば差分だけ転送される。
 #
 # ━━━ 【Yubikey が届いたら】━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #
