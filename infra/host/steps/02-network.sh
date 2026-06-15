@@ -18,25 +18,27 @@ set block-policy drop
 set skip on lo0
 block all
 
-# keep state を明示する。
-# flags S/SA のみでは stateful tracking が確立されず、戻りパケットが落ちる。
-
 # SSH: 管理アクセスを維持 (Yubikey セットアップ完了まで維持する §yubikey-setup.sh)
 pass in on ${WAN_IF} proto tcp to port 22 keep state
 
-# VM ↔ ホスト: DHCP / HTTP (autoinstall) + SSH (プロビジョニング)
+# DHCP: DISCOVER は src=0.0.0.0/dst=255.255.255.255 のブロードキャスト。
+# keep state はステートエントリに有効 src が必要なため 0.0.0.0 で作れず drop される。
+# quick no state で先行許可することで stateful tracking を迂回する。
+pass quick on tap     proto udp from any port 68 to any port 67 no state
+pass quick on vether0 proto udp from any port 67 to any port 68 no state
+pass quick on vether1 proto udp from any port 67 to any port 68 no state
+
+# VM ↔ ホスト: その他の通信
 # bridge(4) のフィルタリングはブリッジ本体ではなく各メンバーで行われる。
-# vmd が VM ごとに作る tap インターフェース (tap グループ) にも明示的に pass が必要。
-# tap* が無いと VM 発の DHCP ブロードキャストが bridge0 到達前に block all で落ちる。
 # bridge0/1 = 手動生成スイッチ, veb0/1 = vmd 自動生成スイッチ (両方許可)
-# vether0/1 = ホスト IP (VM-ホスト通信)
-pass on tap     all keep state
-pass on bridge0 all keep state
-pass on bridge1 all keep state
-pass on veb0    all keep state
-pass on veb1    all keep state
-pass on vether0 all keep state
-pass on vether1 all keep state
+# 内部スイッチは keep state 不要。no state で通す。
+pass on tap     all no state
+pass on bridge0 all no state
+pass on bridge1 all no state
+pass on veb0    all no state
+pass on veb1    all no state
+pass on vether0 all no state
+pass on vether1 all no state
 
 # VM → インターネット: インストールセット取得のみ
 pass out on ${WAN_IF} all keep state

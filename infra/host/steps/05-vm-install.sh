@@ -216,7 +216,7 @@ _wait_ssh() {
                     printf '%s\n' "$_cons" \
                         | while read -r l; do _log "  [${vmname}] ${l}"; done
                 else
-                    _log "  [${vmname}] (無音)"
+                    _log "  [${vmname}]"
                 fi
             fi
         fi
