@@ -44,6 +44,7 @@ Location of sets = http
 HTTP Server = ${gateway}
 Server directory = /sets
 Fetching of BUILDINFO failed. Continue anyway? = yes
+Download firmware? = no
 EOF
 
     # bsd.rd はダウンロードせず infra/sets/ に置かれたものを使う (なければ即エラー)
@@ -152,15 +153,38 @@ VMDEOF
     local _cons_bg=$!
     exec 9>"$_cons_fifo"   # write 端を保持 → cu が EOF を受け取らない
 
-    _wait_ssh "$vmip" "$vmname" "$_cons_log"
+    # bsd.rd インストーラーは sshd を持たないため SSH 待機では完了を検出できない。
+    # 成功すると "CONGRATULATIONS" が出た後に vmmci0: powerdown → vmd が bsd.rd で
+    # 再起動するリブートループに入るため、CONGRATULATIONS を検出次第強制停止する。
+    _inst_n=0
+    while [ "$_inst_n" -lt 120 ]; do
+        if grep -q 'CONGRATULATIONS' "$_cons_log" 2>/dev/null; then
+            _log "[${vmname}] インストール成功を確認 (CONGRATULATIONS)"
+            break
+        fi
+        _inst_n=$((_inst_n + 1))
+        if [ $((_inst_n % 4)) -eq 0 ]; then
+            _log "  インストール待機中 ... $(( (_inst_n * 5) / 60 )) 分経過"
+            _ctail=$(tail -3 "$_cons_log" 2>/dev/null) || true
+            [ -n "$_ctail" ] && printf '%s\n' "$_ctail" \
+                | while read -r l; do _log "  [${vmname}] ${l}"; done
+        fi
+        sleep 5
+    done
 
-    exec 9>&-              # write 端を閉じる → cu が EOF を受けて自然終了
+    exec 9>&-
     wait "$_cons_bg" 2>/dev/null || true
+
+    if ! grep -q 'CONGRATULATIONS' "$_cons_log" 2>/dev/null; then
+        _log "[${vmname}] インストールログ (末尾 20 行):"
+        tail -20 "$_cons_log" 2>/dev/null | while read -r l; do _log "  $l"; done
+        rm -f "$_cons_fifo" "$_cons_log"
+        _die "[${vmname}] インストールタイムアウト (CONGRATULATIONS を検出できず)"
+    fi
     rm -f "$_cons_fifo" "$_cons_log"
-    _log "[${vmname}] SSH 接続確認完了"
-    _log "[${vmname}] インストール完了後の VM を停止..."
-    ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
-        "root@${vmip}" "shutdown -p now" 2>/dev/null || true
+
+    _log "[${vmname}] VM を強制停止 (bsd.rd リブートループを断ち切る)..."
+    vmctl stop -f "$vmname" 2>/dev/null || true
     _stop_n=0
     while :; do
         _stop_state=$(_vm_state_for "$vmname" || true)
@@ -170,12 +194,7 @@ VMDEOF
         esac
         sleep 2
         _stop_n=$((_stop_n + 1))
-        if [ "$_stop_n" -ge 30 ]; then
-            _log "[${vmname}] graceful shutdown 待機タイムアウト → vmctl stop -f"
-            vmctl stop -f "$vmname" 2>/dev/null || true
-            sleep 3
-            break
-        fi
+        [ "$_stop_n" -lt 15 ] || break
     done
     _log "[${vmname}] 停止後状態: $(_vm_state_for "$vmname" || echo 'なし')"
     _ok "${vmname} インストール完了"
