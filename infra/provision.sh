@@ -55,6 +55,18 @@
 #    初回のみホスト側に openrsync を入れる (SSH ログイン後 1 回だけ):
 #      doas pkg_add rsync
 #
+#   # (0) 【初回のみ】infra/sets/ に OpenBSD 7.9 amd64 インストールセットを用意する
+#   #     以下のファイルがすべて揃っていること:
+#   #       base79.tgz  comp79.tgz  bsd  bsd.mp  bsd.rd  SHA256  SHA256.sig  BUILDINFO
+#   #     不足ファイルを取得する例 (macOS から):
+#   #       curl -o infra/sets/BUILDINFO https://cdn.openbsd.org/pub/OpenBSD/7.9/amd64/BUILDINFO
+#   #     取得後に SHA256 を確認:
+#   #       sha256sum infra/sets/BUILDINFO
+#   #       # 期待値: 2abedf464cfcf63ae553f9850e7b68c0315bb3114343c04294b82a411780d1b1
+#   #
+#   #   【初回のみ】sets/ をホストへ転送 (大容量なので rsync の通常対象から除外している):
+#   rsync -av --progress infra/sets/ <YOUR_USERNAME>@192.168.50.200:/tmp/infra/sets/
+#
 #   # (1) infra を /tmp/infra/ に同期 (初回以降は sets/ は除外)
 #   rsync -av --progress --exclude='sets/' infra/ <YOUR_USERNAME>@192.168.50.200:/tmp/infra/
 #
