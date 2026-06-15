@@ -15,7 +15,7 @@ _info "インストールセットは ${SELF}/sets/ から取得します。"
 _info "インストーラー起動メモリ: 512M (-m オプション; vm.conf の本番値とは別)"
 
 _vm_install() {
-    local vmname="$1" vmip="$2" gateway="$3" disk="$4" swname="$5"
+    local vmname="$1" vmip="$2" gateway="$3" disk="$4" swname="$5" setnames="${6:--x* -game* -man* done}"
 
     _info "-- ${vmname} (${vmip})"
     _log "[${vmname}] install.conf を生成 (gateway=${gateway})..."
@@ -39,7 +39,7 @@ Public ssh key for root account = ${PROV_PUBKEY}
 What timezone are you in = Asia/Tokyo
 Which disk is the root disk = sd0
 Use (W)hole disk MBR, whole disk (G)PT or (E)dit? = gpt
-Set name(s) = -x* -game* -man* done
+Set name(s) = ${setnames}
 Location of sets = http
 HTTP Server = ${gateway}
 Server directory = /sets
@@ -274,7 +274,7 @@ rm -f "$_status_tmp" "${_status_tmp}.err"
 _vm_install "vm-db"    "$OWL_DB_IP"    "$HOST_INT_IP"  "/var/vmm/db.img"    "internal_lan"
 _vm_install "vm-git"   "$OWL_GIT_IP"  "$HOST_DEV_IP"  "/var/vmm/git.img"   "dev_lan"
 _vm_install "vm-build" "$OWL_BUILD_IP" "$HOST_DEV_IP" "/var/vmm/build.img" "dev_lan"
-_vm_install "vm-ap"    "$OWL_AP_IP"   "$HOST_INT_IP"  "/var/vmm/ap.img"    "internal_lan"
+_vm_install "vm-ap"    "$OWL_AP_IP"   "$HOST_INT_IP"  "/var/vmm/ap.img"    "internal_lan" "-comp* -x* -game* -man* done"
 
 # 全台の OS クリーンインストールが成功した後に、完全な vm.conf を適用
 _log "全 VM の OS インストール完了。本番用 vm.conf を配置して reload します..."
