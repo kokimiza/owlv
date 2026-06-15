@@ -7,7 +7,7 @@ rcctl stop dhcpd 2>/dev/null || true
 rcctl stop httpd 2>/dev/null || true
 rcctl disable dhcpd 2>/dev/null || true
 rcctl disable httpd 2>/dev/null || true
-rm -rf /tmp/owl-install-www /tmp/dhcpd-prov.conf /tmp/httpd-prov.conf
+rm -f /var/www/htdocs/install.conf /tmp/dhcpd-prov.conf /tmp/httpd-prov.conf
 _ok "プロビジョニングサーバー停止"
 
 # プロビジョニング用の使い捨て鍵を削除

@@ -48,12 +48,13 @@ rcctl stop dhcpd 2>/dev/null || true   # 再実行時の既存インスタンス
 rcctl start dhcpd
 _log "dhcpd PID: $(pgrep -x dhcpd || echo '不明')"
 
-install -d /tmp/owl-install-www
+# httpd は /var/www に chroot するため root は chroot 内のパスで指定する
+install -d /var/www/htdocs
 cat > /tmp/httpd-prov.conf <<HTTP
 server "prov" {
     listen on ${HOST_INT_IP} port 80
     listen on ${HOST_DEV_IP} port 80
-    root "/tmp/owl-install-www"
+    root "/htdocs"
     directory auto index
 }
 HTTP

@@ -22,7 +22,7 @@ _vm_install() {
 
     # install.conf を動的生成して httpd のルートに置く
     # VM の installer が http://<gateway>/install.conf を取得する
-    cat > /tmp/owl-install-www/install.conf <<EOF
+    cat > /var/www/htdocs/install.conf <<EOF
 System hostname = ${vmname}
 Password for root = *
 Network interfaces = vio0
@@ -157,7 +157,24 @@ VMDEOF
     rm -f /tmp/owl-vs.err
     _info "    インストール中 (数分かかります)..."
     _log "[${vmname}] SSH 待機開始 (最大 10 分)..."
-    _wait_ssh "$vmip"
+    # コンソールは 1 回だけ接続してログに流す。
+    # 定期的に connect/SIGTERM を繰り返すと cu がマスター pty を閉じるたびに
+    # VM の com0 が HUP → vmd がクラッシュしてホストが落ちる。
+    # FIFO の write 端 (fd 9) を保持することで cu に EOF を送らず接続を維持する。
+    local _cons_fifo="/tmp/owl-cons-in-${vmname}-$$"
+    local _cons_log="/tmp/owl-cons-${vmname}-$$.log"
+    mkfifo -m 600 "$_cons_fifo"
+    vmctl console "$vmname" < "$_cons_fifo" 2>/dev/null \
+        | awk '{ gsub(/\r/,""); gsub(/\033\[[0-9;]*[A-Za-z]/,""); print; fflush() }' \
+        >> "$_cons_log" &
+    local _cons_bg=$!
+    exec 9>"$_cons_fifo"   # write 端を保持 → cu が EOF を受け取らない
+
+    _wait_ssh "$vmip" "$vmname" "$_cons_log"
+
+    exec 9>&-              # write 端を閉じる → cu が EOF を受けて自然終了
+    wait "$_cons_bg" 2>/dev/null || true
+    rm -f "$_cons_fifo" "$_cons_log"
     _log "[${vmname}] SSH 接続確認完了"
     _log "[${vmname}] インストール完了後の VM を停止..."
     ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
@@ -183,7 +200,7 @@ VMDEOF
 }
 
 _wait_ssh() {
-    local ip="$1"
+    local ip="$1" vmname="$2" cons_log="${3:-}"
     local n=0
     while [ "$n" -lt 120 ]; do
         if ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=4 \
@@ -191,9 +208,17 @@ _wait_ssh() {
             return 0
         fi
         n=$((n + 1))
-        # 30 秒ごとに進捗ログ
-        if [ $((n % 6)) -eq 0 ]; then
+        if [ $((n % 4)) -eq 0 ]; then
             _log "  SSH 待機中 ${ip} ... $((n * 5)) 秒経過 / 600 秒"
+            if [ -n "$cons_log" ]; then
+                _cons=$(tail -5 "$cons_log" 2>/dev/null) || true
+                if [ -n "$_cons" ]; then
+                    printf '%s\n' "$_cons" \
+                        | while read -r l; do _log "  [${vmname}] ${l}"; done
+                else
+                    _log "  [${vmname}] (無音)"
+                fi
+            fi
         fi
         sleep 5
     done
@@ -278,8 +303,8 @@ for _vm in vm-db vm-git vm-build vm-ap; do
 done
 _log "本番 VM 状態:"
 _log_vmctl_status "" || _log "  (取得失敗)"
-_wait_ssh "$OWL_DB_IP"
-_wait_ssh "$OWL_GIT_IP"
-_wait_ssh "$OWL_BUILD_IP"
-_wait_ssh "$OWL_AP_IP"
+_wait_ssh "$OWL_DB_IP"    "vm-db"
+_wait_ssh "$OWL_GIT_IP"   "vm-git"
+_wait_ssh "$OWL_BUILD_IP" "vm-build"
+_wait_ssh "$OWL_AP_IP"    "vm-ap"
 _ok "本番 VM 起動確認完了"

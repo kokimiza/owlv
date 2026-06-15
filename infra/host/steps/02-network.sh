@@ -25,8 +25,12 @@ block all
 pass in on ${WAN_IF} proto tcp to port 22 keep state
 
 # VM ↔ ホスト: DHCP / HTTP (autoinstall) + SSH (プロビジョニング)
+# bridge(4) のフィルタリングはブリッジ本体ではなく各メンバーで行われる。
+# vmd が VM ごとに作る tap インターフェース (tap グループ) にも明示的に pass が必要。
+# tap* が無いと VM 発の DHCP ブロードキャストが bridge0 到達前に block all で落ちる。
 # bridge0/1 = 手動生成スイッチ, veb0/1 = vmd 自動生成スイッチ (両方許可)
 # vether0/1 = ホスト IP (VM-ホスト通信)
+pass on tap     all keep state
 pass on bridge0 all keep state
 pass on bridge1 all keep state
 pass on veb0    all keep state
