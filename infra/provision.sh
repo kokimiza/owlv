@@ -88,7 +88,7 @@ trap '_on_exit $?' EXIT
 # 関数はログ設定より先に定義する (trap 発火時に未定義にならないよう)
 
 _on_exit() {
-	local rc=$1
+	local rc="$1"
 	if [ "$rc" -ne 0 ]; then
 		printf '[%s] エラー終了 (exit %s)\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$rc"
 		echo ""

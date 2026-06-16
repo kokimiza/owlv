@@ -11,19 +11,19 @@ _ok "プロビジョニング鍵: ${PROV_KEY}"
 
 # DR バックアップ用の恒久鍵 (owl-control.sh が VM に SSH するために使用)
 if [ ! -f "$BACKUP_KEY" ]; then
-    _log "DR バックアップ鍵を新規生成: ${BACKUP_KEY}"
-    ssh-keygen -t ed25519 -N "" -C "owl-backup" -f "$BACKUP_KEY" -q
-    chmod 600 "$BACKUP_KEY"
-    _ok "DR バックアップ鍵: ${BACKUP_KEY} (各 VM の authorized_keys に追加される)"
+	_log "DR バックアップ鍵を新規生成: ${BACKUP_KEY}"
+	ssh-keygen -t ed25519 -N "" -C "owl-backup" -f "$BACKUP_KEY" -q
+	chmod 600 "$BACKUP_KEY"
+	_ok "DR バックアップ鍵: ${BACKUP_KEY} (各 VM の authorized_keys に追加される)"
 else
-    _log "DR バックアップ鍵: ${BACKUP_KEY} 既存 → 再利用"
-    _info "DR バックアップ鍵: ${BACKUP_KEY} 既存のため再利用"
+	_log "DR バックアップ鍵: ${BACKUP_KEY} 既存 → 再利用"
+	_info "DR バックアップ鍵: ${BACKUP_KEY} 既存のため再利用"
 fi
 BACKUP_PUBKEY="$(cat ${BACKUP_KEY}.pub)"
 _log "バックアップ公開鍵: ${BACKUP_PUBKEY}"
 
 # autoinstall サーバー (dhcpd + httpd)
-cat > /tmp/dhcpd-prov.conf <<DHCP
+cat >/tmp/dhcpd-prov.conf <<DHCP
 option domain-name-servers ${HOST_INT_IP};
 subnet 10.0.1.0 netmask 255.255.255.0 {
     range 10.0.1.200 10.0.1.210;
@@ -44,7 +44,7 @@ DHCP
 _log "dhcpd を enable → flags 設定 → 起動..."
 rcctl enable dhcpd
 rcctl set dhcpd flags "-c /tmp/dhcpd-prov.conf vether0 vether1"
-rcctl stop dhcpd 2>/dev/null || true   # 再実行時の既存インスタンスを停止
+rcctl stop dhcpd 2>/dev/null || true # 再実行時の既存インスタンスを停止
 rcctl start dhcpd
 _log "dhcpd PID: $(pgrep -x dhcpd || echo '不明')"
 
@@ -52,11 +52,11 @@ _log "dhcpd PID: $(pgrep -x dhcpd || echo '不明')"
 install -d /var/www/htdocs
 # OpenBSD に nullfs がないため sets をコピーする (07-lockdown.sh で rm -rf)
 [ -d "${SELF}/sets" ] || _die "インストールセットが見つかりません: ${SELF}/sets\n  事前に scp -r infra/sets <host>:/etc/owl/infra/ してください"
-[ -f "${SELF}/sets/bsd.rd" ]    || _die "bsd.rd が見つかりません: ${SELF}/sets/bsd.rd"
+[ -f "${SELF}/sets/bsd.rd" ] || _die "bsd.rd が見つかりません: ${SELF}/sets/bsd.rd"
 [ -f "${SELF}/sets/BUILDINFO" ] || _die "BUILDINFO が見つかりません: ${SELF}/sets/BUILDINFO\n  取得方法: ftp https://cdn.openbsd.org/pub/OpenBSD/7.9/amd64/BUILDINFO"
 install -d /var/www/htdocs/sets
 cp -rp "${SELF}/sets/." /var/www/htdocs/sets/
-cat > /tmp/httpd-prov.conf <<HTTP
+cat >/tmp/httpd-prov.conf <<HTTP
 server "prov" {
     listen on ${HOST_INT_IP} port 80
     listen on ${HOST_DEV_IP} port 80
@@ -67,7 +67,7 @@ HTTP
 _log "httpd を enable → flags 設定 → 起動..."
 rcctl enable httpd
 rcctl set httpd flags "-f /tmp/httpd-prov.conf"
-rcctl stop httpd 2>/dev/null || true   # 再実行時の既存インスタンスを停止
+rcctl stop httpd 2>/dev/null || true # 再実行時の既存インスタンスを停止
 rcctl start httpd
 _log "httpd PID: $(pgrep -x httpd || echo '不明')"
 _ok "DHCP / HTTP サーバー起動"
