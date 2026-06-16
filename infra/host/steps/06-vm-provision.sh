@@ -30,23 +30,25 @@ _vm_provision() {
              echo '${BACKUP_PUBKEY}' >> /root/.ssh/authorized_keys
          chmod 600 /root/.ssh/authorized_keys"
 
-	# install.conf で DNS nameservers = gateway (ホスト) と設定されるが、ホストに
-	# DNS フォワーダーは存在しないため名前解決できない。
-	# resolvd / dhclient が resolv.conf を上書きし直すのを防ぐため両方停止してから固定する。
-	_log "[${vmname}] DNS を固定 (1.1.1.1)..."
+	# install.conf が "DNS nameservers = gateway" を設定する。
+	# ホスト側 unwind + pf rdr-to がゲートウェイ向け DNS クエリを 127.0.0.1:53 へ転送するため
+	# resolv.conf はそのまま (= gateway IP) でよい。
+	# resolvd / dhclient が resolv.conf を再上書きするのだけ防ぐ。
+	_log "[${vmname}] resolvd/dhclient を停止 (resolv.conf 保護)..."
 	ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
 		"rcctl disable resolvd 2>/dev/null || true
          rcctl stop   resolvd 2>/dev/null || true
-         pkill -x dhclient   2>/dev/null || true
-         echo 'nameserver 1.1.1.1' > /etc/resolv.conf" ||
-		_die "[${vmname}] DNS 固定コマンド失敗"
+         pkill -x dhclient   2>/dev/null || true" ||
+		_die "[${vmname}] DNS 保護コマンド失敗"
 
 	# NAT + DNS 疎通確認: ここで失敗させることで pkg_add の無限リトライ (40分ハング) を防ぐ
+	# ping: OpenBSD は -w (小文字) でタイムアウト指定。-W (大文字) は無効で即失敗するため使わない。
+	# DNS: host/dig は base 非収録。ping でホスト名を指定すると resolv → ICMP の両方を確認できる。
 	_log "[${vmname}] NAT / DNS 疎通確認..."
 	ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
-		"ping -c 2 -W 3 1.1.1.1 >/dev/null 2>&1 || { echo 'NAT 障害: 1.1.1.1 に到達不可'; exit 1; }
-         host cdn.openbsd.org 1.1.1.1 >/dev/null 2>&1 || { echo 'DNS 障害: cdn.openbsd.org を解決できない'; exit 1; }" ||
-		_die "[${vmname}] 疎通確認失敗。ホスト側で確認: pfctl -s nat / sysctl net.inet.ip.forwarding"
+		"ping -c 2 -w 6 1.1.1.1 >/dev/null 2>&1 || { echo 'NAT 障害: 1.1.1.1 に到達不可'; exit 1; }
+         ping -c 1 -w 5 cdn.openbsd.org >/dev/null 2>&1 || { echo 'DNS 障害: cdn.openbsd.org を解決できない'; exit 1; }" ||
+		_die "[${vmname}] 疎通確認失敗。ホスト側で確認: pfctl -s rules / sysctl net.inet.ip.forwarding"
 
 	# autoinstall が /etc/installurl をプロビジョニングサーバー (10.0.x.1/sets) に
 	# 設定してしまうため、pkg_add の前に公式 CDN ミラーへ上書きする
