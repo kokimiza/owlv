@@ -183,10 +183,14 @@ _ok "vmd 起動 (スイッチのみ)"
 # unwind は base 同梱 (pkg_add 不要)。pf の rdr-to で VM の DNS クエリを
 # 127.0.0.1:53 へ転送することで gateway = DNS サーバーを実現する (step 02 参照)。
 _log "unwind (DNS リゾルバー) を設定・起動..."
+# unwind.conf: forwarder の区切りはスペース (コンマ不可)
 cat >/etc/unwind.conf <<'UNWINDEOF'
-# フォワード先: Cloudflare (プロビジョニング中の外向き通信は step 02 の暫定 pf が許可)
-forwarder { 1.1.1.1, 1.0.0.1 }
+forwarder { 1.1.1.1 1.0.0.1 }
 UNWINDEOF
 rcctl enable unwind
-rcctl start unwind 2>/dev/null || rcctl restart unwind
+if ! rcctl start unwind; then
+	_log "unwind 起動失敗 — /var/log/daemon 直近ログ:"
+	grep -i unwind /var/log/daemon 2>/dev/null | tail -5 | while read -r l; do _log "  $l"; done
+	_die "unwind の起動に失敗しました"
+fi
 _ok "unwind 起動 (127.0.0.1:53 → 1.1.1.1)"
