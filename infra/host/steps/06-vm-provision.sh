@@ -30,15 +30,23 @@ _vm_provision() {
              echo '${BACKUP_PUBKEY}' >> /root/.ssh/authorized_keys
          chmod 600 /root/.ssh/authorized_keys"
 
-	# autoinstall が DNS を gateway (ホスト) に設定するが、ホストに DNS フォワーダーがないため
-	# 外部名前解決できない。pkg_add の前に外部リゾルバーへ切り替える。
-	# resolvd は有効なままだと DHCP リース情報で /etc/resolv.conf を上書きし直すため、
-	# 先に無効化してから固定の resolv.conf を書く (OpenBSD の既知の挙動)。
-	_log "[${vmname}] DNS を外部リゾルバーへ設定..."
+	# install.conf で DNS nameservers = gateway (ホスト) と設定されるが、ホストに
+	# DNS フォワーダーは存在しないため名前解決できない。
+	# resolvd / dhclient が resolv.conf を上書きし直すのを防ぐため両方停止してから固定する。
+	_log "[${vmname}] DNS を固定 (1.1.1.1)..."
 	ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
-		"rcctl disable resolvd
-         rcctl stop resolvd 2>/dev/null || true
-         echo 'nameserver 1.1.1.1' > /etc/resolv.conf"
+		"rcctl disable resolvd 2>/dev/null || true
+         rcctl stop   resolvd 2>/dev/null || true
+         pkill -x dhclient   2>/dev/null || true
+         echo 'nameserver 1.1.1.1' > /etc/resolv.conf" ||
+		_die "[${vmname}] DNS 固定コマンド失敗"
+
+	# NAT + DNS 疎通確認: ここで失敗させることで pkg_add の無限リトライ (40分ハング) を防ぐ
+	_log "[${vmname}] NAT / DNS 疎通確認..."
+	ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
+		"ping -c 2 -W 3 1.1.1.1 >/dev/null 2>&1 || { echo 'NAT 障害: 1.1.1.1 に到達不可'; exit 1; }
+         host cdn.openbsd.org 1.1.1.1 >/dev/null 2>&1 || { echo 'DNS 障害: cdn.openbsd.org を解決できない'; exit 1; }" ||
+		_die "[${vmname}] 疎通確認失敗。ホスト側で確認: pfctl -s nat / sysctl net.inet.ip.forwarding"
 
 	# autoinstall が /etc/installurl をプロビジョニングサーバー (10.0.x.1/sets) に
 	# 設定してしまうため、pkg_add の前に公式 CDN ミラーへ上書きする

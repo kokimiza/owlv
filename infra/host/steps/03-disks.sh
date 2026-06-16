@@ -1,3 +1,4 @@
+# shellcheck shell=ksh
 # step 03 — VM ディスクイメージ作成
 _step 3 "VM ディスクイメージ作成"
 _log "ディスクイメージディレクトリ: /var/vmm"

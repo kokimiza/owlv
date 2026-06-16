@@ -1,3 +1,4 @@
+# shellcheck shell=ksh
 # step 02 — 仮想ネットワーク設定
 _step 2 "仮想ネットワーク設定"
 
@@ -40,7 +41,12 @@ pass on veb1    all no state
 pass on vether0 all no state
 pass on vether1 all no state
 
-# VM → インターネット: インストールセット取得のみ
+# VM DNS → unwind (127.0.0.1:53) へリダイレクト
+# install.conf の "DNS nameservers = gateway" を機能させる (step 01 で unwind 起動済み)
+pass in quick on vether0 proto { udp tcp } from 10.0.1.0/24 to ${HOST_INT_IP} port 53 rdr-to 127.0.0.1
+pass in quick on vether1 proto { udp tcp } from 10.0.2.0/24 to ${HOST_DEV_IP} port 53 rdr-to 127.0.0.1
+
+# VM → インターネット: インストールセット取得 / pkg_add / ソースビルド用
 pass out on ${WAN_IF} all keep state
 PFEOF
 _log "pfctl -s rules:"

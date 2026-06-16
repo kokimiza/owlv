@@ -1,3 +1,4 @@
+# shellcheck shell=ksh
 # step 07 — 本番封鎖
 _step 7 "本番封鎖"
 

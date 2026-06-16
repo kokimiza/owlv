@@ -1,3 +1,4 @@
+# shellcheck shell=ksh
 # step 04 — SSH 鍵生成 + autoinstall サーバー起動
 _step 4 "SSH 鍵生成"
 

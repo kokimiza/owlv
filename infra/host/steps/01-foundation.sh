@@ -1,3 +1,4 @@
+# shellcheck shell=ksh
 # step 01 — ホスト基盤セットアップ
 _step 1 "ホスト基盤セットアップ"
 
@@ -175,3 +176,17 @@ if ! _log_vmctl_status ""; then
 	_die "vmd は起動しましたが vmctl status に応答しません"
 fi
 _ok "vmd 起動 (スイッチのみ)"
+
+# ── unwind (ホスト内蔵 DNS リゾルバー) ──────────────────────
+# VM の install.conf は "DNS nameservers = gateway" を指定するが、
+# ゲートウェイ (ホスト) に DNS フォワーダーがないと pkg_add が無限リトライになる。
+# unwind は base 同梱 (pkg_add 不要)。pf の rdr-to で VM の DNS クエリを
+# 127.0.0.1:53 へ転送することで gateway = DNS サーバーを実現する (step 02 参照)。
+_log "unwind (DNS リゾルバー) を設定・起動..."
+cat >/etc/unwind.conf <<'UNWINDEOF'
+# フォワード先: Cloudflare (プロビジョニング中の外向き通信は step 02 の暫定 pf が許可)
+forwarder { 1.1.1.1, 1.0.0.1 }
+UNWINDEOF
+rcctl enable unwind
+rcctl start unwind 2>/dev/null || rcctl restart unwind
+_ok "unwind 起動 (127.0.0.1:53 → 1.1.1.1)"

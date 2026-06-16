@@ -1,3 +1,4 @@
+# shellcheck shell=ksh
 # step 05 — VM OS autoinstall
 _step 5 "VM OS autoinstall"
 _log "ホストメモリ:"
