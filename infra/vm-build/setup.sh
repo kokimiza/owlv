@@ -17,6 +17,7 @@ _ok() { _log "  ✓ $*"; }
 
 OWL_BUILD_IP="${OWL_BUILD_IP:?OWL_BUILD_IP is required}"
 OWL_GIT_IP="${OWL_GIT_IP:?OWL_GIT_IP is required}"
+FORGEJO_RUNNER_SECRET="${FORGEJO_RUNNER_SECRET:?FORGEJO_RUNNER_SECRET is required}"
 GHC_VERSION="${GHC_VERSION:-9.6}"
 FORGEJO_RUNNER_VERSION="3.5.0"
 
@@ -40,15 +41,29 @@ su -m _build -c "cabal update" 2>/dev/null ||
 pkg_add rocksdb 2>/dev/null ||
 	_info "警告: rocksdb が見つかりません。手動でインストールしてください: pkg_add rocksdb"
 
-# ── Forgejo Runner ────────────────────────────────────────
-_log "Forgejo Runner ${FORGEJO_RUNNER_VERSION} をインストール"
+# ── Forgejo Runner (OpenBSD: ソースからビルド) ───────────────────
+# 公式リリースは linux-amd64 / linux-arm64 のみ。OpenBSD では go build が必要 (§3.1)。
+# 純粋 Go 実装のため Node.js 等の追加依存は不要。
+_log "Forgejo Runner ${FORGEJO_RUNNER_VERSION} をソースからビルド"
 RUNNER_BIN="/usr/local/bin/forgejo-runner"
-RUNNER_URL="https://code.forgejo.org/forgejo/runner/releases/download/v${FORGEJO_RUNNER_VERSION}/forgejo-runner-${FORGEJO_RUNNER_VERSION}-linux-amd64"
+RUNNER_SRC="/tmp/forgejo-runner-build"
 
 if [ ! -f "$RUNNER_BIN" ]; then
-	ftp -o "$RUNNER_BIN" "$RUNNER_URL" ||
-		_die "forgejo-runner のダウンロードに失敗しました"
+	pkg_add go 2>/dev/null || _die "go のインストールに失敗しました"
+
+	ftp -o "${RUNNER_SRC}.tar.gz" \
+		"https://code.forgejo.org/forgejo/runner/archive/v${FORGEJO_RUNNER_VERSION}.tar.gz" ||
+		_die "Forgejo Runner ソースのダウンロードに失敗しました (v${FORGEJO_RUNNER_VERSION})"
+
+	mkdir -p "$RUNNER_SRC"
+	tar xzf "${RUNNER_SRC}.tar.gz" -C "$RUNNER_SRC" --strip-components=1
+	rm -f "${RUNNER_SRC}.tar.gz"
+
+	(cd "$RUNNER_SRC" && go build -o "$RUNNER_BIN" .) ||
+		_die "Forgejo Runner のビルドに失敗しました"
+
 	chmod 755 "$RUNNER_BIN"
+	rm -rf "$RUNNER_SRC"
 	_ok "forgejo-runner: ${RUNNER_BIN}"
 else
 	_info "forgejo-runner: 既存のためスキップ"
@@ -60,11 +75,12 @@ id _runner >/dev/null 2>&1 ||
 install -d -m 750 -o _runner /var/forgejo-runner
 install -d -m 750 -o _runner /var/log/forgejo-runner
 
-# runner 設定テンプレート (トークンは Forgejo Web UI から手動で発行する)
+# runner 設定 (オフライン登録済み; .runner ファイルを別途生成する)
 cat >/var/forgejo-runner/config.yml.template <<EOF
 # forgejo-runner config.yml
-# トークン登録後に config.yml にコピーして使用する
-# forgejo-runner register --no-interactive --instance http://${OWL_GIT_IP}:3000 --token <TOKEN> --name vm-build --labels 'openbsd,haskell'
+# provision.sh によるオフライン登録フロー (§4.1):
+#   git_vm:   forgejo forgejo-cli actions register --name vm-build --secret <hex>
+#   build_vm: forgejo-runner create-runner-file --instance http://<GIT_IP>:3000 --secret <同じhex>
 
 log:
   level: info
@@ -88,7 +104,7 @@ host:
 EOF
 chown _runner /var/forgejo-runner/config.yml.template
 
-# rc.d サービス (トークン登録後に手動で起動する)
+# rc.d サービス (オフライン登録後に自動で起動する)
 cat >/etc/rc.d/forgejo-runner <<'EOF'
 #!/bin/ksh
 daemon="/usr/local/bin/forgejo-runner"
@@ -100,21 +116,29 @@ daemon_logger="daemon.info"
 rc_cmd $1
 EOF
 chmod 755 /etc/rc.d/forgejo-runner
-# rcctl enable はトークン登録後に行う (今は起動しない)
-_info "Forgejo Runner サービス登録 (トークン登録後に rcctl enable forgejo-runner)"
+# ── オフライン Runner 登録 (Web UI 不要) ─────────────────────
+# vm-git/setup.sh で forgejo forgejo-cli actions register が完了している前提。
+# forgejo-runner create-runner-file はネットワーク接続なしで .runner ファイルを生成する。
+_log "Forgejo Runner オフライン登録 (.runner ファイル生成)"
+su -m _runner -c "cd /var/forgejo-runner && \
+	forgejo-runner create-runner-file \
+		--instance 'http://${OWL_GIT_IP}:3000' \
+		--secret '${FORGEJO_RUNNER_SECRET}' \
+		--name vm-build \
+		--labels 'openbsd,haskell'" ||
+	_die "forgejo-runner create-runner-file に失敗しました"
+_ok ".runner ファイル生成"
+
+cp /var/forgejo-runner/config.yml.template /var/forgejo-runner/config.yml
+chown _runner /var/forgejo-runner/config.yml
+
+rcctl enable forgejo-runner
+rcctl start forgejo-runner
+_ok "Forgejo Runner 起動"
 
 _log "Build VM セットアップ完了"
 echo ""
-echo " 【重要: 必ず手動で実施してください】"
-echo "   1. Forgejo Web UI でRunner トークンを発行"
-echo "      Settings → Actions → Runners → Create new runner"
-echo "   2. トークンを登録:"
-echo "      (vm-build で) forgejo-runner register \\"
-echo "        --no-interactive \\"
-echo "        --instance http://${OWL_GIT_IP}:3000 \\"
-echo "        --token <TOKEN> \\"
-echo "        --name vm-build \\"
-echo "        --labels 'openbsd,haskell'"
-echo "   3. Runner を有効化:"
-echo "      rcctl enable forgejo-runner && rcctl start forgejo-runner"
-echo "   4. owlv リポジトリに .forgejo/workflows/build.yml を追加"
+echo " 【残りの手動作業】"
+echo "   1. owlv リポジトリに .forgejo/workflows/build.yml を追加"
+echo "   2. git push で CI トリガーを確認:"
+echo "      Forgejo → owlv → Actions タブ"

@@ -72,4 +72,5 @@ rsyncnet_remote = "rsyncnet:owl-dr-backup"
 window_seconds  = 300
 
 [forgejo]
-version = "7.0.4"
+version        = "15.0.3"
+runner_version = "12.11.1"

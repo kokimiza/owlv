@@ -225,11 +225,12 @@ OWL_BUILD_IP=$(_toml "network.dev_lan" "build_vm")
 GHC_VERSION=$(_toml "toolchain" "ghc_version")
 PG_VERSION=$(_toml "app" "pg_version")
 FORGEJO_VER=$(_toml "forgejo" "version")
+FORGEJO_RUNNER_VER=$(_toml "forgejo" "runner_version")
 _log "設定読み込み完了:"
 _log "  OWL_RELEASE=${OWL_RELEASE}  WAN_IF=${WAN_IF}"
 _log "  internal_lan: AP=${OWL_AP_IP} DB=${OWL_DB_IP}"
 _log "  dev_lan:      Git=${OWL_GIT_IP} Build=${OWL_BUILD_IP}"
-_log "  GHC=${GHC_VERSION}  PG=${PG_VERSION}  Forgejo=${FORGEJO_VER}"
+_log "  GHC=${GHC_VERSION}  PG=${PG_VERSION}  Forgejo=${FORGEJO_VER}  Runner=${FORGEJO_RUNNER_VER}"
 
 HOST_INT_IP="10.0.1.1"
 HOST_DEV_IP="10.0.2.1"
@@ -237,8 +238,14 @@ PROV_KEY=/etc/owl/prov_ed25519     # プロビジョニング用の使い捨て 
 BACKUP_KEY=/etc/owl/backup_ed25519 # DR 用の恒久 SSH 鍵 (owl-control.sh が使用)
 LOGDIR=/var/log/owl
 
+# Runner 登録シークレット: git_vm と build_vm で共有する (Web UI 不要のオフライン登録)
+# § 4.1: forgejo forgejo-cli actions register / forgejo-runner create-runner-file
+FORGEJO_RUNNER_SECRET=$(openssl rand -hex 20)
+_log "Forgejo Runner シークレット生成完了 (40 文字 hex)"
+
 export OWL_AP_IP OWL_DB_IP OWL_GIT_IP OWL_BUILD_IP \
-	OWL_RELEASE GHC_VERSION PG_VERSION FORGEJO_VER
+	OWL_RELEASE GHC_VERSION PG_VERSION FORGEJO_VER FORGEJO_RUNNER_VER \
+	FORGEJO_RUNNER_SECRET
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -271,8 +278,8 @@ echo "   sh /etc/owl/infra/host/security/yubikey-setup.sh"
 echo ""
 echo " 【初回セットアップの続き】"
 echo "   vm-db   : psql で owl スキーマ・RLS を適用"
-echo "   vm-git  : Forgejo Web UI 初期化 → Runner トークン発行"
-echo "   vm-build: forgejo-runner register でトークン登録"
+echo "   vm-git  : Forgejo CLI 初期化済 (admin ユーザー・Runner 登録完了)"
+echo "   vm-build: Forgejo Runner 起動済 (オフライン登録)"
 echo ""
 echo " 【DR 復元の場合】"
 echo "   age identity をエスクロー (§2.3) から取り出し"

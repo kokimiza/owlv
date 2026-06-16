@@ -1,3 +1,4 @@
+# shellcheck shell=ksh
 # step 06 — VM 内部プロビジョニング
 _step 6 "VM 内部プロビジョニング"
 
@@ -52,6 +53,8 @@ _vm_provision() {
          OWL_GIT_IP='${OWL_GIT_IP}' OWL_BUILD_IP='${OWL_BUILD_IP}' \
          OWL_RELEASE='${OWL_RELEASE}' GHC_VERSION='${GHC_VERSION}' \
          PG_VERSION='${PG_VERSION}' FORGEJO_VERSION='${FORGEJO_VER}' \
+         FORGEJO_RUNNER_VERSION='${FORGEJO_RUNNER_VER}' \
+         FORGEJO_RUNNER_SECRET='${FORGEJO_RUNNER_SECRET}' \
          sh /provision/${vmname}/setup.sh"
 	_log "[${vmname}] setup.sh 完了"
 
