@@ -12,16 +12,16 @@
 
 services:
   db:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: owl
       POSTGRES_PASSWORD: owl-dev-only   # 検証専用。本番値は絶対に書かない
       POSTGRES_DB: owl
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql   # PG18+ は pg_ctlcluster 互換のためこの親ディレクトリにマウントする
     # ホストから psql で直接接続したい場合はコメントを外す
-    # ports:
-    #   - "127.0.0.1:5432:5432"
+    ports:
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U owl -d owl"]
       interval: 2s

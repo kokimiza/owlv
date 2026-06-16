@@ -1,15 +1,24 @@
 {- | Append-only event store backed by PostgreSQL, with optimistic concurrency control.
 
-Schema (run once per database, handled by migrate):
+Schema (run once per database, handled by migrate; full design notes in
+infra/vm-db/doc/event-store.md):
   CREATE TABLE IF NOT EXISTS events (
-    seq         BIGSERIAL    PRIMARY KEY,
-    event_type  TEXT         NOT NULL,
-    payload     TEXT         NOT NULL,
-    recorded_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    seq          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    event_id     UUID        NOT NULL DEFAULT uuidv7(),
+    event_type   TEXT        NOT NULL,
+    payload      JSONB       NOT NULL,
+    payload_type TEXT GENERATED ALWAYS AS (payload ->> 'type') VIRTUAL,
+    recorded_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    CONSTRAINT events_type_matches_payload
+      CHECK (payload_type IS NULL OR payload_type = event_type)
   );
+  CREATE UNIQUE INDEX IF NOT EXISTS events_event_id_key ON events (event_id);
+  CREATE INDEX IF NOT EXISTS events_event_type_seq_idx ON events (event_type, seq);
+  CREATE INDEX IF NOT EXISTS events_recorded_at_idx ON events (recorded_at);
   CREATE TABLE IF NOT EXISTS stream_version (
     id      INT    PRIMARY KEY,
-    version BIGINT NOT NULL DEFAULT 0
+    version BIGINT NOT NULL DEFAULT 0,
+    CONSTRAINT stream_version_singleton CHECK (id = 1)
   );
 
 Connection is configured via libpq environment variables:
@@ -106,17 +115,34 @@ migrate conn = do
     PG.execute_
       conn
       "CREATE TABLE IF NOT EXISTS events \
-      \( seq         BIGSERIAL    PRIMARY KEY \
-      \, event_type  TEXT         NOT NULL    \
-      \, payload     TEXT         NOT NULL    \
-      \, recorded_at TIMESTAMPTZ  NOT NULL DEFAULT NOW() \
+      \( seq          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY \
+      \, event_id     UUID        NOT NULL DEFAULT uuidv7() \
+      \, event_type   TEXT        NOT NULL \
+      \, payload      JSONB       NOT NULL \
+      \, payload_type TEXT GENERATED ALWAYS AS (payload ->> 'type') VIRTUAL \
+      \, recorded_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp() \
+      \, CONSTRAINT events_type_matches_payload \
+      \    CHECK (payload_type IS NULL OR payload_type = event_type) \
       \)"
+  _ <-
+    PG.execute_
+      conn
+      "CREATE UNIQUE INDEX IF NOT EXISTS events_event_id_key ON events (event_id)"
+  _ <-
+    PG.execute_
+      conn
+      "CREATE INDEX IF NOT EXISTS events_event_type_seq_idx ON events (event_type, seq)"
+  _ <-
+    PG.execute_
+      conn
+      "CREATE INDEX IF NOT EXISTS events_recorded_at_idx ON events (recorded_at)"
   _ <-
     PG.execute_
       conn
       "CREATE TABLE IF NOT EXISTS stream_version \
       \( id      INT    PRIMARY KEY \
       \, version BIGINT NOT NULL DEFAULT 0 \
+      \, CONSTRAINT stream_version_singleton CHECK (id = 1) \
       \)"
   -- バージョンを既存イベント数で初期化（既に行がある場合は何もしない）
   _ <-
@@ -139,7 +165,7 @@ loadFromPg conn = do
   [PG.Only ver] <-
     PG.query_ conn "SELECT version FROM stream_version WHERE id = 1" :: IO [PG.Only Int64]
   rows <-
-    PG.query_ conn "SELECT payload FROM events ORDER BY seq ASC" :: IO [PG.Only Text]
+    PG.query_ conn "SELECT payload::text FROM events ORDER BY seq ASC" :: IO [PG.Only Text]
   events <- mapM decodeRow rows
   pure (StreamVersion ver, events)
  where
@@ -175,7 +201,7 @@ appendToPg conn (StreamVersion expected) evts = do
         typ = eventType ev
     in PG.execute
          conn
-         "INSERT INTO events (event_type, payload) VALUES (?, ?)"
+         "INSERT INTO events (event_type, payload) VALUES (?, ?::jsonb)"
          (typ :: Text, payload :: Text)
 
 eventType :: Event -> Text

@@ -5,10 +5,13 @@
 # 実行: provision.sh の STEP 6 から SSH で呼び出す
 set -eu
 
-_log()  { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
-_die()  { _log "エラー: $*" >&2; exit 1; }
+_log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+_die() {
+	_log "エラー: $*" >&2
+	exit 1
+}
 _info() { _log "    $*"; }
-_ok()   { _log "  ✓ $*"; }
+_ok() { _log "  ✓ $*"; }
 
 [ "$(id -u)" -eq 0 ] || _die "root で実行してください"
 
@@ -22,20 +25,20 @@ _log "Build VM セットアップ開始 (${OWL_BUILD_IP})"
 # ── パッケージ (GHC / cabal / 依存) ─────────────────────
 _log "GHC ${GHC_VERSION} および開発ツールをインストール"
 # GHC は ports から (バイナリパッケージとして提供)
-pkg_add "ghc-${GHC_VERSION}" cabal-install git curl 2>/dev/null \
-    || pkg_add ghc cabal-install git curl 2>/dev/null \
-    || _die "GHC のインストールに失敗しました。pkg_add ghc を手動で実行してください"
+pkg_add "ghc-${GHC_VERSION}" cabal-install git curl 2>/dev/null ||
+	pkg_add ghc cabal-install git curl 2>/dev/null ||
+	_die "GHC のインストールに失敗しました。pkg_add ghc を手動で実行してください"
 _ok "GHC / cabal / git"
 
 # cabal パッケージインデックスを更新 (build 時ではなく今実行しておく)
 _info "cabal update"
-su -m _build -c "cabal update" 2>/dev/null || \
-    cabal update 2>/dev/null || true
+su -m _build -c "cabal update" 2>/dev/null ||
+	cabal update 2>/dev/null || true
 
 # owlv の依存パッケージ (brick, rocksdb-haskell, etc.)
 # RocksDB C ライブラリが必要
-pkg_add rocksdb 2>/dev/null || \
-    _info "警告: rocksdb が見つかりません。手動でインストールしてください: pkg_add rocksdb"
+pkg_add rocksdb 2>/dev/null ||
+	_info "警告: rocksdb が見つかりません。手動でインストールしてください: pkg_add rocksdb"
 
 # ── Forgejo Runner ────────────────────────────────────────
 _log "Forgejo Runner ${FORGEJO_RUNNER_VERSION} をインストール"
@@ -43,22 +46,22 @@ RUNNER_BIN="/usr/local/bin/forgejo-runner"
 RUNNER_URL="https://code.forgejo.org/forgejo/runner/releases/download/v${FORGEJO_RUNNER_VERSION}/forgejo-runner-${FORGEJO_RUNNER_VERSION}-linux-amd64"
 
 if [ ! -f "$RUNNER_BIN" ]; then
-    ftp -o "$RUNNER_BIN" "$RUNNER_URL" \
-        || _die "forgejo-runner のダウンロードに失敗しました"
-    chmod 755 "$RUNNER_BIN"
-    _ok "forgejo-runner: ${RUNNER_BIN}"
+	ftp -o "$RUNNER_BIN" "$RUNNER_URL" ||
+		_die "forgejo-runner のダウンロードに失敗しました"
+	chmod 755 "$RUNNER_BIN"
+	_ok "forgejo-runner: ${RUNNER_BIN}"
 else
-    _info "forgejo-runner: 既存のためスキップ"
+	_info "forgejo-runner: 既存のためスキップ"
 fi
 
 # runner 専用ユーザー
-id _runner >/dev/null 2>&1 || \
-    useradd -m -d /var/forgejo-runner -s /sbin/nologin _runner
+id _runner >/dev/null 2>&1 ||
+	useradd -m -d /var/forgejo-runner -s /sbin/nologin _runner
 install -d -m 750 -o _runner /var/forgejo-runner
 install -d -m 750 -o _runner /var/log/forgejo-runner
 
 # runner 設定テンプレート (トークンは Forgejo Web UI から手動で発行する)
-cat > /var/forgejo-runner/config.yml.template <<EOF
+cat >/var/forgejo-runner/config.yml.template <<EOF
 # forgejo-runner config.yml
 # トークン登録後に config.yml にコピーして使用する
 # forgejo-runner register --no-interactive --instance http://${OWL_GIT_IP}:3000 --token <TOKEN> --name vm-build --labels 'openbsd,haskell'
@@ -86,7 +89,7 @@ EOF
 chown _runner /var/forgejo-runner/config.yml.template
 
 # rc.d サービス (トークン登録後に手動で起動する)
-cat > /etc/rc.d/forgejo-runner <<'EOF'
+cat >/etc/rc.d/forgejo-runner <<'EOF'
 #!/bin/ksh
 daemon="/usr/local/bin/forgejo-runner"
 daemon_user="_runner"

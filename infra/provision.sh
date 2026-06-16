@@ -60,9 +60,6 @@
 #   #       base79.tgz  comp79.tgz  bsd  bsd.mp  bsd.rd  SHA256  SHA256.sig  BUILDINFO
 #   #     不足ファイルを取得する例 (macOS から):
 #   #       curl -o infra/sets/BUILDINFO https://cdn.openbsd.org/pub/OpenBSD/7.9/amd64/BUILDINFO
-#   #     取得後に SHA256 を確認:
-#   #       sha256sum infra/sets/BUILDINFO
-#   #       # 期待値: 2abedf464cfcf63ae553f9850e7b68c0315bb3114343c04294b82a411780d1b1
 #   #
 #   #   【初回のみ】sets/ をホストへ転送 (大容量なので rsync の通常対象から除外している):
 #   rsync -av --progress infra/sets/ <YOUR_USERNAME>@192.168.50.200:/tmp/infra/sets/
@@ -91,91 +88,94 @@ trap '_on_exit $?' EXIT
 # 関数はログ設定より先に定義する (trap 発火時に未定義にならないよう)
 
 _on_exit() {
-    local rc=$1
-    if [ "$rc" -ne 0 ]; then
-        printf '[%s] エラー終了 (exit %s)\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$rc"
-        echo ""
-        echo "エラー終了 (exit $rc)。PF ルールを安全な暫定状態に維持します。"
-        echo "ログ: ${LOGFILE:-'(未設定)'}"
-        echo "再実行: sh /etc/owl/infra/provision.sh"
-    else
-        printf '[%s] プロビジョニング正常終了\n' "$(date '+%Y-%m-%d %H:%M:%S')"
-    fi
+	local rc=$1
+	if [ "$rc" -ne 0 ]; then
+		printf '[%s] エラー終了 (exit %s)\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$rc"
+		echo ""
+		echo "エラー終了 (exit $rc)。PF ルールを安全な暫定状態に維持します。"
+		echo "ログ: ${LOGFILE:-'(未設定)'}"
+		echo "再実行: sh /etc/owl/infra/provision.sh"
+	else
+		printf '[%s] プロビジョニング正常終了\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+	fi
 }
 
-_die()  { printf '[%s] FATAL: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2; exit 1; }
+_die() {
+	printf '[%s] FATAL: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2
+	exit 1
+}
 _step() { printf '\n━━━ [%s/%s] %s\n' "$1" "$TOTAL" "$2"; }
-_ok()   { printf '    ✓ %s\n' "$*"; }
+_ok() { printf '    ✓ %s\n' "$*"; }
 _info() { printf '      %s\n' "$*"; }
-_log()  { printf '    [%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
+_log() { printf '    [%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 
 _vmctl_status_to() {
-    local out="$1" err="${1}.err"
+	local out="$1" err="${1}.err"
 
-    if vmctl status >"$out" 2>"$err"; then
-        rm -f "$err"
-        return 0
-    fi
+	if vmctl status >"$out" 2>"$err"; then
+		rm -f "$err"
+		return 0
+	fi
 
-    # switch-only の /etc/vm.conf では VM 行が無く、環境によっては
-    # ヘッダを出していても vmctl status が非 0 を返す。ヘッダが取れて
-    # いれば vmd は応答しているものとして扱う。
-    if grep -q 'OWNER.*STATE.*NAME' "$out" 2>/dev/null; then
-        rm -f "$err"
-        return 0
-    fi
+	# switch-only の /etc/vm.conf では VM 行が無く、環境によっては
+	# ヘッダを出していても vmctl status が非 0 を返す。ヘッダが取れて
+	# いれば vmd は応答しているものとして扱う。
+	if grep -q 'OWNER.*STATE.*NAME' "$out" 2>/dev/null; then
+		rm -f "$err"
+		return 0
+	fi
 
-    return 1
+	return 1
 }
 
 _vmctl_status_ok() {
-    local out="/tmp/owl-vmctl-status.$$"
+	local out="/tmp/owl-vmctl-status.$$"
 
-    if _vmctl_status_to "$out"; then
-        rm -f "$out" "${out}.err"
-        return 0
-    fi
-    rm -f "$out" "${out}.err"
-    return 1
+	if _vmctl_status_to "$out"; then
+		rm -f "$out" "${out}.err"
+		return 0
+	fi
+	rm -f "$out" "${out}.err"
+	return 1
 }
 
 _log_vmctl_status() {
-    local prefix="$1" out="/tmp/owl-vmctl-status.$$"
+	local prefix="$1" out="/tmp/owl-vmctl-status.$$"
 
-    if _vmctl_status_to "$out"; then
-        while read -r l; do _log "  ${prefix}${l}"; done < "$out"
-        rm -f "$out" "${out}.err"
-        return 0
-    fi
+	if _vmctl_status_to "$out"; then
+		while read -r l; do _log "  ${prefix}${l}"; done <"$out"
+		rm -f "$out" "${out}.err"
+		return 0
+	fi
 
-    if [ -s "${out}.err" ]; then
-        while read -r l; do _log "  ${prefix}${l}"; done < "${out}.err"
-    fi
-    rm -f "$out" "${out}.err"
-    return 1
+	if [ -s "${out}.err" ]; then
+		while read -r l; do _log "  ${prefix}${l}"; done <"${out}.err"
+	fi
+	rm -f "$out" "${out}.err"
+	return 1
 }
 
 _bridge_members() {
-    local ifn="$1" members
+	local ifn="$1" members
 
-    members=$(ifconfig "$ifn" 2>/dev/null | awk '
+	members=$(ifconfig "$ifn" 2>/dev/null | awk '
         /^[[:space:]]+member:/ { printf "%s ", $2 }
         /^[[:space:]]+[[:alnum:]_]+[0-9]+[[:space:]]+flags=/ { printf "%s ", $1 }
     ')
-    printf '%s\n' "${members:-'(なし)'}"
+	printf '%s\n' "${members:-'(なし)'}"
 }
 
 _vm_state_for() {
-    local vmname="$1" out="/tmp/owl-vmctl-state.$$" state
+	local vmname="$1" out="/tmp/owl-vmctl-state.$$" state
 
-    if _vmctl_status_to "$out"; then
-        state=$(awk -v n="$vmname" 'NR>1 && $NF==n{print $(NF-1); exit}' "$out")
-        rm -f "$out" "${out}.err"
-        printf '%s\n' "$state"
-        return 0
-    fi
-    rm -f "$out" "${out}.err"
-    return 1
+	if _vmctl_status_to "$out"; then
+		state=$(awk -v n="$vmname" 'NR>1 && $NF==n{print $(NF-1); exit}' "$out")
+		rm -f "$out" "${out}.err"
+		printf '%s\n' "$state"
+		return 0
+	fi
+	rm -f "$out" "${out}.err"
+	return 1
 }
 
 # ── ログファイル ───────────────────────────────────────────
@@ -185,9 +185,9 @@ mkdir -p /var/log/owl
 LOGFILE="/var/log/owl/provision-$(date +%Y%m%d-%H%M%S).log"
 _LOGPIPE="/tmp/owl-prov-$$.pipe"
 mkfifo -m 600 "$_LOGPIPE"
-tee -a "$LOGFILE" < "$_LOGPIPE" &
-exec > "$_LOGPIPE" 2>&1
-rm -f "$_LOGPIPE"   # 名前を消してもプロセス間の fd は維持される
+tee -a "$LOGFILE" <"$_LOGPIPE" &
+exec >"$_LOGPIPE" 2>&1
+rm -f "$_LOGPIPE" # 名前を消してもプロセス間の fd は維持される
 printf '[%s] ログ出力先: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$LOGFILE"
 
 [ "$(id -u)" -eq 0 ] || _die "root で実行してください"
@@ -205,7 +205,7 @@ _log "provision.sh: ${SELF}/provision.sh checksum=$(cksum "$0" | awk '{print $1 
 
 # ── TOML 読み込み ──────────────────────────────────────────
 _toml() {
-    awk -v sec="[$1]" -v k="$2" '
+	awk -v sec="[$1]" -v k="$2" '
         /^\[/ { in_sec=($0==sec) }
         in_sec && $1==k {
             sub(/^[^=]+=[ ]*/, "")  # "key = " を除去
@@ -216,15 +216,15 @@ _toml() {
     ' "$CONFIG"
 }
 
-OWL_RELEASE=$(_toml  "host"                "openbsd_release")
-WAN_IF=$(_toml       "host"                "wan_interface")
-OWL_AP_IP=$(_toml    "network.internal_lan" "ap_vm")
-OWL_DB_IP=$(_toml    "network.internal_lan" "db_vm")
-OWL_GIT_IP=$(_toml   "network.dev_lan"     "git_vm")
-OWL_BUILD_IP=$(_toml "network.dev_lan"     "build_vm")
-GHC_VERSION=$(_toml  "toolchain"           "ghc_version")
-PG_VERSION=$(_toml   "app"                 "pg_version")
-FORGEJO_VER=$(_toml  "forgejo"             "version")
+OWL_RELEASE=$(_toml "host" "openbsd_release")
+WAN_IF=$(_toml "host" "wan_interface")
+OWL_AP_IP=$(_toml "network.internal_lan" "ap_vm")
+OWL_DB_IP=$(_toml "network.internal_lan" "db_vm")
+OWL_GIT_IP=$(_toml "network.dev_lan" "git_vm")
+OWL_BUILD_IP=$(_toml "network.dev_lan" "build_vm")
+GHC_VERSION=$(_toml "toolchain" "ghc_version")
+PG_VERSION=$(_toml "app" "pg_version")
+FORGEJO_VER=$(_toml "forgejo" "version")
 _log "設定読み込み完了:"
 _log "  OWL_RELEASE=${OWL_RELEASE}  WAN_IF=${WAN_IF}"
 _log "  internal_lan: AP=${OWL_AP_IP} DB=${OWL_DB_IP}"
@@ -233,12 +233,12 @@ _log "  GHC=${GHC_VERSION}  PG=${PG_VERSION}  Forgejo=${FORGEJO_VER}"
 
 HOST_INT_IP="10.0.1.1"
 HOST_DEV_IP="10.0.2.1"
-PROV_KEY=/etc/owl/prov_ed25519      # プロビジョニング用の使い捨て SSH 鍵
-BACKUP_KEY=/etc/owl/backup_ed25519  # DR 用の恒久 SSH 鍵 (owl-control.sh が使用)
+PROV_KEY=/etc/owl/prov_ed25519     # プロビジョニング用の使い捨て SSH 鍵
+BACKUP_KEY=/etc/owl/backup_ed25519 # DR 用の恒久 SSH 鍵 (owl-control.sh が使用)
 LOGDIR=/var/log/owl
 
 export OWL_AP_IP OWL_DB_IP OWL_GIT_IP OWL_BUILD_IP \
-       OWL_RELEASE GHC_VERSION PG_VERSION FORGEJO_VER
+	OWL_RELEASE GHC_VERSION PG_VERSION FORGEJO_VER
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

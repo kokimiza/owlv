@@ -5,10 +5,13 @@
 # 実行: provision.sh の STEP 6 から SSH で呼び出す
 set -eu
 
-_log()  { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
-_die()  { _log "エラー: $*" >&2; exit 1; }
+_log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+_die() {
+	_log "エラー: $*" >&2
+	exit 1
+}
 _info() { _log "    $*"; }
-_ok()   { _log "  ✓ $*"; }
+_ok() { _log "  ✓ $*"; }
 
 [ "$(id -u)" -eq 0 ] || _die "root で実行してください"
 
@@ -26,8 +29,8 @@ pkg_add git sqlite3 2>/dev/null
 _ok "git / sqlite3"
 
 # ── Forgejo ユーザー ─────────────────────────────────────
-id "$FORGEJO_USER" >/dev/null 2>&1 || \
-    useradd -m -d "$FORGEJO_HOME" -s /bin/ksh "$FORGEJO_USER"
+id "$FORGEJO_USER" >/dev/null 2>&1 ||
+	useradd -m -d "$FORGEJO_HOME" -s /bin/ksh "$FORGEJO_USER"
 install -d -m 750 -o git "$FORGEJO_DATA"
 _ok "git ユーザー"
 
@@ -37,19 +40,19 @@ FORGEJO_BIN="/usr/local/bin/forgejo"
 FORGEJO_URL="https://codeberg.org/forgejo/forgejo/releases/download/v${FORGEJO_VERSION}/forgejo-${FORGEJO_VERSION}-linux-amd64"
 
 if [ ! -f "$FORGEJO_BIN" ]; then
-    ftp -o "$FORGEJO_BIN" "$FORGEJO_URL" \
-        || _die "Forgejo のダウンロードに失敗しました: ${FORGEJO_URL}"
-    chmod 755 "$FORGEJO_BIN"
-    _ok "Forgejo バイナリ: ${FORGEJO_BIN}"
+	ftp -o "$FORGEJO_BIN" "$FORGEJO_URL" ||
+		_die "Forgejo のダウンロードに失敗しました: ${FORGEJO_URL}"
+	chmod 755 "$FORGEJO_BIN"
+	_ok "Forgejo バイナリ: ${FORGEJO_BIN}"
 else
-    _info "Forgejo バイナリ: 既存のためスキップ"
+	_info "Forgejo バイナリ: 既存のためスキップ"
 fi
 
 # ── Forgejo 設定 ─────────────────────────────────────────
 _log "Forgejo 設定ファイルを配置"
 install -d -m 750 -o git "${FORGEJO_DATA}/custom/conf"
 
-cat > "${FORGEJO_DATA}/custom/conf/app.ini" <<EOF
+cat >"${FORGEJO_DATA}/custom/conf/app.ini" <<EOF
 APP_NAME = owlv Git
 RUN_USER = git
 RUN_MODE = prod
@@ -93,7 +96,7 @@ _ok "Forgejo 設定"
 
 # ── rc.d サービス ─────────────────────────────────────────
 _log "Forgejo サービス登録"
-cat > /etc/rc.d/forgejo <<'EOF'
+cat >/etc/rc.d/forgejo <<'EOF'
 #!/bin/ksh
 daemon="/usr/local/bin/forgejo"
 daemon_user="git"

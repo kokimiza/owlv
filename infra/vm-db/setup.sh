@@ -5,10 +5,13 @@
 # 実行: provision.sh の STEP 6 から SSH で呼び出す
 set -eu
 
-_log()  { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
-_die()  { _log "エラー: $*" >&2; exit 1; }
+_log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+_die() {
+	_log "エラー: $*" >&2
+	exit 1
+}
 _info() { _log "    $*"; }
-_ok()   { _log "  ✓ $*"; }
+_ok() { _log "  ✓ $*"; }
 
 [ "$(id -u)" -eq 0 ] || _die "root で実行してください"
 
@@ -16,7 +19,7 @@ _ok()   { _log "  ✓ $*"; }
 OWL_DB_IP="${OWL_DB_IP:?OWL_DB_IP is required}"
 OWL_AP_IP="${OWL_AP_IP:?OWL_AP_IP is required}"
 OWL_HOST_IP="${OWL_HOST_IP:-10.0.1.1}"
-PG_VERSION="${PG_VERSION:-16}"
+PG_VERSION="${PG_VERSION:-18}"
 DB_NAME="${DB_NAME:-owl}"
 DB_APP_USER="${DB_APP_USER:-owl_app}"
 DB_REPL_USER="${DB_REPL_USER:-owl_repl}"
@@ -25,15 +28,15 @@ _log "DB VM セットアップ開始 (${OWL_DB_IP})"
 
 # ── パッケージ ────────────────────────────────────────────
 _log "PostgreSQL ${PG_VERSION} インストール"
-pkg_add "postgresql-server-${PG_VERSION}" "postgresql-client-${PG_VERSION}" \
-    || _die "postgresql のインストールに失敗しました"
+pkg_add "postgresql-server-${PG_VERSION}" "postgresql-client-${PG_VERSION}" ||
+	_die "postgresql のインストールに失敗しました"
 _ok "PostgreSQL ${PG_VERSION}"
 
 # ── PostgreSQL 初期化 ─────────────────────────────────────
 _log "PostgreSQL 初期化"
 install -d -m 700 -o _postgresql /var/postgresql/data
 su -m _postgresql -c "initdb -D /var/postgresql/data --auth-local=trust --auth-host=scram-sha-256 --encoding=UTF8 --lc-collate=C --lc-ctype=C --pwprompt --no-instructions 2>/dev/null" \
-    << 'EOF'
+	<<'EOF'
 changeme_root_password
 changeme_root_password
 EOF
@@ -44,17 +47,17 @@ _log "PostgreSQL 設定ファイルを配置"
 PGDATA=/var/postgresql/data
 
 install -m 640 -o _postgresql /provision/vm-db/postgresql.conf "${PGDATA}/postgresql.conf"
-install -m 640 -o _postgresql /provision/vm-db/pg_hba.conf     "${PGDATA}/pg_hba.conf"
+install -m 640 -o _postgresql /provision/vm-db/pg_hba.conf "${PGDATA}/pg_hba.conf"
 
 # TLS 証明書: セルフサイン (本番運用前に内部 CA 発行に差し替えること)
 if [ ! -f "${PGDATA}/server.crt" ]; then
-    openssl req -new -x509 -days 3650 -nodes \
-        -subj "/CN=vm-db.local/O=owlv" \
-        -keyout "${PGDATA}/server.key" \
-        -out    "${PGDATA}/server.crt" 2>/dev/null
-    chmod 600 "${PGDATA}/server.key"
-    chown _postgresql "${PGDATA}/server.key" "${PGDATA}/server.crt"
-    _info "自己署名 TLS 証明書を生成しました。本番前に内部 CA 発行の証明書に差し替えてください"
+	openssl req -new -x509 -days 3650 -nodes \
+		-subj "/CN=vm-db.local/O=owlv" \
+		-keyout "${PGDATA}/server.key" \
+		-out "${PGDATA}/server.crt" 2>/dev/null
+	chmod 600 "${PGDATA}/server.key"
+	chown _postgresql "${PGDATA}/server.key" "${PGDATA}/server.crt"
+	_info "自己署名 TLS 証明書を生成しました。本番前に内部 CA 発行の証明書に差し替えてください"
 fi
 
 # WAL アーカイブ先
@@ -62,10 +65,10 @@ install -d -m 750 -o _postgresql /var/postgresql/wal_archive
 
 # postgresql.conf のプレースホルダーを実際の値に置換
 sed -i \
-    -e "s|__DB_IP__|${OWL_DB_IP}|g" \
-    -e "s|__AP_IP__|${OWL_AP_IP}|g" \
-    -e "s|__HOST_IP__|${OWL_HOST_IP}|g" \
-    "${PGDATA}/postgresql.conf" "${PGDATA}/pg_hba.conf"
+	-e "s|__DB_IP__|${OWL_DB_IP}|g" \
+	-e "s|__AP_IP__|${OWL_AP_IP}|g" \
+	-e "s|__HOST_IP__|${OWL_HOST_IP}|g" \
+	"${PGDATA}/postgresql.conf" "${PGDATA}/pg_hba.conf"
 
 _ok "設定ファイル配置"
 
@@ -79,16 +82,16 @@ _log "DB ユーザー・データベース作成"
 
 su -m _postgresql -c "psql -c \"\
     CREATE USER ${DB_APP_USER} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE \
-        ENCRYPTED PASSWORD 'changeme_app_password';\"" 2>/dev/null || \
-    _info "${DB_APP_USER} は既に存在します"
+        ENCRYPTED PASSWORD 'changeme_app_password';\"" 2>/dev/null ||
+	_info "${DB_APP_USER} は既に存在します"
 
 su -m _postgresql -c "psql -c \"\
     CREATE USER ${DB_REPL_USER} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE REPLICATION \
-        ENCRYPTED PASSWORD 'changeme_repl_password';\"" 2>/dev/null || \
-    _info "${DB_REPL_USER} は既に存在します"
+        ENCRYPTED PASSWORD 'changeme_repl_password';\"" 2>/dev/null ||
+	_info "${DB_REPL_USER} は既に存在します"
 
-su -m _postgresql -c "createdb -O ${DB_APP_USER} ${DB_NAME} 2>/dev/null" || \
-    _info "${DB_NAME} は既に存在します"
+su -m _postgresql -c "createdb -O ${DB_APP_USER} ${DB_NAME} 2>/dev/null" ||
+	_info "${DB_NAME} は既に存在します"
 
 # RLS を有効化
 su -m _postgresql -c "psql ${DB_NAME} -c '\

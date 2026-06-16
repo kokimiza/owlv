@@ -31,15 +31,19 @@ _vm_provision() {
 
     # autoinstall が DNS を gateway (ホスト) に設定するが、ホストに DNS フォワーダーがないため
     # 外部名前解決できない。pkg_add の前に外部リゾルバーへ切り替える。
+    # resolvd は有効なままだと DHCP リース情報で /etc/resolv.conf を上書きし直すため、
+    # 先に無効化してから固定の resolv.conf を書く (OpenBSD の既知の挙動)。
     _log "[${vmname}] DNS を外部リゾルバーへ設定..."
     ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
-        "echo 'nameserver 1.1.1.1' > /etc/resolv.conf"
+        "rcctl disable resolvd
+         rcctl stop resolvd 2>/dev/null || true
+         echo 'nameserver 1.1.1.1' > /etc/resolv.conf"
 
     # autoinstall が /etc/installurl をプロビジョニングサーバー (10.0.x.1/sets) に
     # 設定してしまうため、pkg_add の前に公式 CDN ミラーへ上書きする
     _log "[${vmname}] installurl を CDN ミラーへ更新..."
     ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
-        "echo 'https://cdn.openbsd.org/pub/OpenBSD/' > /etc/installurl"
+        "echo 'https://cdn.openbsd.org/pub/OpenBSD' > /etc/installurl"
 
     # setup.sh を実行
     _log "[${vmname}] setup.sh を実行中..."
