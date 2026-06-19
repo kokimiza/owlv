@@ -57,6 +57,11 @@ db_app_user    = "owl_app"
 db_repl_user   = "owl_repl"
 pg_version     = "18"
 
+[user]
+# .claude/user.md §2/§7: Admin ロールを自動付与する唯一の OS ユーザー名。
+# provision.sh 同様、このユーザー自体は usermod -G wheel で事前に手動作成しておく。
+root_admin_username = "owladmin"
+
 [install]
 # VM の OS インストール時に使う OpenBSD ミラー
 # provision.sh 実行時はまだ外向き通信が開いているので直接取得する
