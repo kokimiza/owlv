@@ -1,7 +1,7 @@
 {- | Generic command executor — the sandwich pattern with optimistic retry.
 Shell: load events → fold evolve → decide → append new events.
 楽観ロック競合が発生した場合は load からやり直し、最大 maxRetries 回試みる。
-UseCases stay pure; all IO is confined here.
+Orchestration here stays a thin wrapper around pure Core calls; all IO is confined here.
 
 executeCommandEff is the effect-based variant: no IOE in its constraint because
 all I/O is mediated through the four Shell effects. Run it with the interpreters

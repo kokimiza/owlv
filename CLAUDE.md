@@ -24,11 +24,10 @@ The domain specification is [.claude/ifrs_standard.md](.claude/ifrs_standard.md)
 
 ## Architecture: FCIS (Functional Core, Imperative Shell)
 
-Dependency direction is one-way and absolute: `Core ← UseCases ← Shell`.
+Dependency direction is one-way and absolute: `Core ← Shell`. FCIS draws one line — pure vs. effectful — not a stack of layers, so there is no separate `UseCases/` folder (unlike classic Clean Architecture, which has an interactor layer between domain and infrastructure).
 
 - `src/Core/` — pure. MUST NOT import IO, brick, database, clock, random, or anything effectful.
-- `src/UseCases/` — pure orchestration of Core functions. Same import ban as Core.
-- `src/Shell/` — the only place IO is allowed: SQLite event store, RocksDB projector, brick TUI, clock, and the single generic command executor (load events → fold `evolve` → `decide` → append events).
+- `src/Shell/` — the only place IO is allowed: SQLite event store, RocksDB projector, brick TUI, clock, and the single generic command executor (load events → fold `evolve` → `decide` → append events). Use-case-shaped orchestration (load data → call Core → persist) lives here, as plain functions that call into Core — not as a separate layer or typeclass.
 - `app/Main.hs` — config, wiring, startup only.
 
 ### Recipe for adding a feature (follow exactly)
@@ -40,7 +39,7 @@ Dependency direction is one-way and absolute: `Core ← UseCases ← Shell`.
 5. Shell stays untouched by default. If you believe Shell must change, stop and explain why before editing.
 6. Add property tests for every new decide/evolve branch (debit = credit, fold determinism, serialization roundtrip).
 
-UseCases must stay pure: load all required data up front in Shell (sandwich pattern). Do not introduce effect interfaces, free monads, or repository typeclasses to work around this — widen the use case's input instead.
+Shell orchestration must load all required data up front (sandwich pattern) so the Core calls in between stay pure. Do not introduce effect interfaces, free monads, or repository typeclasses to work around this — widen the function's input instead.
 
 ## Domain invariants (MUST)
 
@@ -55,7 +54,7 @@ UseCases must stay pure: load all required data up front in Shell (sandwich patt
 ## Forbidden
 
 - `unsafePerformIO`; partial functions (`head`, `fromJust`, incomplete patterns)
-- Effectful imports inside `Core/` or `UseCases/`
+- Effectful imports inside `Core/`
 - Accounting logic that contradicts the spec
 
 ## Toolchain

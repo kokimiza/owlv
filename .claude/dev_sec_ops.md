@@ -188,7 +188,7 @@ Rev.1 の「Alpine Linux コンテナによる musl 静的バイナリ生成」�
 
 #### Core のユニットテスト(自動・CI で実行)
 
-`Core/` および `UseCases/` は純粋関数で構成されるため、PostgreSQL・Docker・ネットワーク等のインフラを一切必要としない。
+`Core/` は純粋関数のみで構成されるため、PostgreSQL・Docker・ネットワーク等のインフラを一切必要としない（FCIS は UseCases フォルダを設けず、orchestration は `Shell/` に置く。[CLAUDE.md](../CLAUDE.md) 参照）。
 
 ```
 cabal test          # ローカルマシンで実行。全 Core ドメインロジックを網羅
