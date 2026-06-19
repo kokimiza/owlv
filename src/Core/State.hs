@@ -19,6 +19,8 @@ module Core.State
   , initialBenefitBook
   , TaxBook (..)
   , initialTaxBook
+  , UserBook (..)
+  , initialUserBook
   , AppBook (..)
   , initialAppBook
   ) where
@@ -46,6 +48,7 @@ import Core.Domain.Partner (Partner, PartnerId)
 import Core.Domain.Reconciliation (Reconciliation, ReconciliationId)
 import Core.Domain.SubAccount (SubAccount, SubAccountId)
 import Core.Domain.Tax (TaxEntry, TaxEntryId)
+import Core.Domain.User (OsUid, User, UserId, firstOsUid)
 
 newtype JournalBook = JournalBook
   { journalEntries :: Map JournalEntryId JournalEntry
@@ -148,6 +151,21 @@ newtype TaxBook = TaxBook
 initialTaxBook :: TaxBook
 initialTaxBook = TaxBook Map.empty
 
+{- | ユーザーマスタの読みモデル (.claude/user.md §2)
+
+ubNextUid: 次に割り当てる OS UID（単調増加・再利用しない）。
+ubPendingEscalations: Admin 昇格の提案中マップ（対象 → 提案者）。承認で消費される。
+-}
+data UserBook = UserBook
+  { users :: Map UserId User
+  , ubNextUid :: OsUid
+  , ubPendingEscalations :: Map UserId UserId
+  }
+  deriving (Eq, Show)
+
+initialUserBook :: UserBook
+initialUserBook = UserBook Map.empty firstOsUid Map.empty
+
 data AppBook = AppBook
   { appJournals :: JournalBook
   , appMasters :: MasterBook
@@ -159,6 +177,7 @@ data AppBook = AppBook
   , appJudgmentLogs :: JudgmentLogBook
   , appBenefits :: BenefitBook
   , appTax :: TaxBook
+  , appUsers :: UserBook
   }
   deriving (Eq, Show)
 
@@ -175,3 +194,4 @@ initialAppBook =
     initialJudgmentLogBook
     initialBenefitBook
     initialTaxBook
+    initialUserBook

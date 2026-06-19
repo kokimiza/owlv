@@ -65,6 +65,7 @@ _vm_provision() {
          PG_VERSION='${PG_VERSION}' FORGEJO_VERSION='${FORGEJO_VER}' \
          FORGEJO_RUNNER_VERSION='${FORGEJO_RUNNER_VER}' \
          FORGEJO_RUNNER_SECRET='${FORGEJO_RUNNER_SECRET}' \
+         OWLV_ROOT_ADMIN_USERNAME='${OWLV_ROOT_ADMIN_USERNAME}' \
          sh /provision/${vmname}/setup.sh"
 	_log "[${vmname}] setup.sh 完了"
 

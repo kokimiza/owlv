@@ -46,6 +46,7 @@ library
         Core.Domain.Materiality
         Core.Domain.EmployeeBenefit
         Core.Domain.Tax
+        Core.Domain.User
         Core.Error
         Core.Command
         Core.Event
@@ -60,7 +61,11 @@ library
         Shell.Interpreters.Clock
         Shell.Interpreters.UserContext
         Shell.Interpreters.AuditLog
+        Shell.Interpreters.PasswordHash
+        Shell.Interpreters.UserOsSync
+        Shell.Interpreters.OsIdentity
         Shell.CommandExecutor
+        Shell.UserOps
         Shell.TUI.Attrs
         Shell.TUI.Helpers
         Shell.TUI.Types
@@ -73,6 +78,7 @@ library
         Shell.TUI.Screen.Master.Partner
         Shell.TUI.Screen.Master.AccountCode
         Shell.TUI.Screen.Master.SubAccount
+        Shell.TUI.Screen.Master.User
         Shell.TUI.Screen.VoucherSearch
     build-depends:
         brick                >= 2.3,
@@ -80,7 +86,21 @@ library
         vty-crossplatform    >= 0.4,
         effectful            >= 2.3,
         postgresql-simple >= 0.7,
-        bytestring        >= 0.11
+        bytestring        >= 0.11,
+        process           >= 1.6,
+        -- ExceptT + throwError/liftEither/withExceptT による早期リターン記述用
+        -- (CommandExecutor / UserOps / UserOsSync の IO+Either ネスト解消)。
+        -- GHC boot package なので追加インストール不要。
+        mtl               >= 2.3,
+        -- パスワードハッシュ (Argon2id, §2.3): crypton は libargon2 を同梱ビルドするため
+        -- 外部Cライブラリの事前インストールは不要 (.claude/user.md §2.3)。
+        -- argon2 パッケージ(hvr/argon2)は base<4.18 に固定され GHC2024(base>=4.20)と
+        -- 不整合のため、メンテナンスされている crypton 経由で同じ実装を使う。
+        crypton           >= 1.0,
+        memory            >= 0.18,
+        base64-bytestring >= 1.2,
+        -- SSH 確立した OS ログイン名の取得 (.claude/user.md §4.1)。GHC boot package。
+        unix              >= 2.8
     default-language: GHC2024
 
 executable owlv
@@ -125,6 +145,7 @@ test-suite owlv-test
         Core.FxRateSpec
         Core.JudgmentLogSpec
         Core.ClosingSpec
+        Core.UserSpec
     build-depends:
         owlv,
         effectful        >= 2.3,

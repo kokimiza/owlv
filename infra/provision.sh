@@ -226,6 +226,7 @@ GHC_VERSION=$(_toml "toolchain" "ghc_version")
 PG_VERSION=$(_toml "app" "pg_version")
 FORGEJO_VER=$(_toml "forgejo" "version")
 FORGEJO_RUNNER_VER=$(_toml "forgejo" "runner_version")
+OWLV_ROOT_ADMIN_USERNAME=$(_toml "user" "root_admin_username")
 _log "設定読み込み完了:"
 _log "  OWL_RELEASE=${OWL_RELEASE}  WAN_IF=${WAN_IF}"
 _log "  internal_lan: AP=${OWL_AP_IP} DB=${OWL_DB_IP}"
@@ -245,7 +246,7 @@ _log "Forgejo Runner シークレット生成完了 (40 文字 hex)"
 
 export OWL_AP_IP OWL_DB_IP OWL_GIT_IP OWL_BUILD_IP \
 	OWL_RELEASE GHC_VERSION PG_VERSION FORGEJO_VER FORGEJO_RUNNER_VER \
-	FORGEJO_RUNNER_SECRET
+	FORGEJO_RUNNER_SECRET OWLV_ROOT_ADMIN_USERNAME
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

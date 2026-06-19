@@ -4,7 +4,7 @@ module Core.Event
 
 import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, (.:), (.=))
 import Data.Text (Text)
-import Data.Time (Day)
+import Data.Time (Day, UTCTime)
 
 import Core.Domain.AccountMaster (AccountMaster)
 import Core.Domain.AccountingPeriod (AccountingPeriodId)
@@ -22,6 +22,7 @@ import Core.Domain.Partner (Partner)
 import Core.Domain.Reconciliation (Reconciliation, ReconciliationId)
 import Core.Domain.SubAccount (SubAccount)
 import Core.Domain.Tax (TaxEntry)
+import Core.Domain.User (OsUid, Role, SshPubKey, UserId)
 
 data Event
   = JournalEntryRecorded JournalEntry
@@ -64,6 +65,25 @@ data Event
     BenefitLiabilityRecorded BenefitLiability
   | -- 法人所得税 (§4.7.16) ─────────────────────────────────────────────
     TaxEntryRecorded TaxEntry
+  | -- ユーザー管理 (.claude/user.md §2) ────────────────────────────────────
+    UserCreated UserId OsUid Text Role [Text]
+  | UserRoleChanged UserId Role
+  | UserRoleEscalationProposed
+      -- | 提案者
+      UserId
+      -- | 対象
+      UserId
+  | UserScopeGranted UserId Text
+  | UserScopeRevoked UserId Text
+  | UserPasswordChanged UserId Text
+  | UserSshKeyRegistered UserId SshPubKey
+  | UserSuspended UserId
+  | UserReactivated UserId
+  | UserRemoved UserId
+  | UserOsSyncSucceeded UserId
+  | UserOsSyncFailed UserId Text
+  | UserOsDriftDetected UserId Text
+  | UserLoginObserved UserId UTCTime (Maybe Text)
   deriving (Eq, Show)
 
 instance ToJSON Event where
@@ -158,6 +178,51 @@ instance ToJSON Event where
   -- 法人所得税
   toJSON (TaxEntryRecorded t) =
     object ["type" .= ("TaxEntryRecorded" :: Text), "data" .= t]
+  -- ユーザー管理
+  toJSON (UserCreated uid uidOs name role scopes) =
+    object
+      [ "type" .= ("UserCreated" :: Text)
+      , "userId" .= uid
+      , "osUid" .= uidOs
+      , "name" .= name
+      , "role" .= role
+      , "scopes" .= scopes
+      ]
+  toJSON (UserRoleChanged uid role) =
+    object ["type" .= ("UserRoleChanged" :: Text), "userId" .= uid, "role" .= role]
+  toJSON (UserRoleEscalationProposed proposer target) =
+    object
+      [ "type" .= ("UserRoleEscalationProposed" :: Text)
+      , "proposer" .= proposer
+      , "target" .= target
+      ]
+  toJSON (UserScopeGranted uid scope) =
+    object ["type" .= ("UserScopeGranted" :: Text), "userId" .= uid, "scope" .= scope]
+  toJSON (UserScopeRevoked uid scope) =
+    object ["type" .= ("UserScopeRevoked" :: Text), "userId" .= uid, "scope" .= scope]
+  toJSON (UserPasswordChanged uid hash) =
+    object ["type" .= ("UserPasswordChanged" :: Text), "userId" .= uid, "hash" .= hash]
+  toJSON (UserSshKeyRegistered uid key) =
+    object ["type" .= ("UserSshKeyRegistered" :: Text), "userId" .= uid, "key" .= key]
+  toJSON (UserSuspended uid) =
+    object ["type" .= ("UserSuspended" :: Text), "userId" .= uid]
+  toJSON (UserReactivated uid) =
+    object ["type" .= ("UserReactivated" :: Text), "userId" .= uid]
+  toJSON (UserRemoved uid) =
+    object ["type" .= ("UserRemoved" :: Text), "userId" .= uid]
+  toJSON (UserOsSyncSucceeded uid) =
+    object ["type" .= ("UserOsSyncSucceeded" :: Text), "userId" .= uid]
+  toJSON (UserOsSyncFailed uid reason) =
+    object ["type" .= ("UserOsSyncFailed" :: Text), "userId" .= uid, "reason" .= reason]
+  toJSON (UserOsDriftDetected uid detail) =
+    object ["type" .= ("UserOsDriftDetected" :: Text), "userId" .= uid, "detail" .= detail]
+  toJSON (UserLoginObserved uid at srcIp) =
+    object
+      [ "type" .= ("UserLoginObserved" :: Text)
+      , "userId" .= uid
+      , "at" .= at
+      , "srcIp" .= srcIp
+      ]
 
 instance FromJSON Event where
   parseJSON = withObject "Event" $ \o -> do
@@ -222,4 +287,27 @@ instance FromJSON Event where
       "BenefitLiabilityRecorded" -> BenefitLiabilityRecorded <$> o .: "data"
       -- 法人所得税
       "TaxEntryRecorded" -> TaxEntryRecorded <$> o .: "data"
+      -- ユーザー管理
+      "UserCreated" ->
+        UserCreated
+          <$> o .: "userId"
+          <*> o .: "osUid"
+          <*> o .: "name"
+          <*> o .: "role"
+          <*> o .: "scopes"
+      "UserRoleChanged" -> UserRoleChanged <$> o .: "userId" <*> o .: "role"
+      "UserRoleEscalationProposed" ->
+        UserRoleEscalationProposed <$> o .: "proposer" <*> o .: "target"
+      "UserScopeGranted" -> UserScopeGranted <$> o .: "userId" <*> o .: "scope"
+      "UserScopeRevoked" -> UserScopeRevoked <$> o .: "userId" <*> o .: "scope"
+      "UserPasswordChanged" -> UserPasswordChanged <$> o .: "userId" <*> o .: "hash"
+      "UserSshKeyRegistered" -> UserSshKeyRegistered <$> o .: "userId" <*> o .: "key"
+      "UserSuspended" -> UserSuspended <$> o .: "userId"
+      "UserReactivated" -> UserReactivated <$> o .: "userId"
+      "UserRemoved" -> UserRemoved <$> o .: "userId"
+      "UserOsSyncSucceeded" -> UserOsSyncSucceeded <$> o .: "userId"
+      "UserOsSyncFailed" -> UserOsSyncFailed <$> o .: "userId" <*> o .: "reason"
+      "UserOsDriftDetected" -> UserOsDriftDetected <$> o .: "userId" <*> o .: "detail"
+      "UserLoginObserved" ->
+        UserLoginObserved <$> o .: "userId" <*> o .: "at" <*> o .: "srcIp"
       _ -> fail ("unknown Event type: " <> show typ)

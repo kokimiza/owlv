@@ -46,6 +46,16 @@ import Core.Domain.Reconciliation
   )
 import Core.Domain.SubAccount (SubAccount (..), SubAccountId (..))
 import Core.Domain.Tax (TaxEntry (..))
+import Core.Domain.User
+  ( Role (..)
+  , SshPubKey (..)
+  , User (..)
+  , UserId (..)
+  , UserStatus (..)
+  , isActiveAdmin
+  , mkSshPubKey
+  , mkUserId
+  )
 import Core.Error (DomainError (..))
 import Core.Event (Event (..))
 import Core.State
@@ -58,6 +68,7 @@ import Core.State
   , JudgmentLogBook (..)
   , MasterBook (..)
   , PeriodsBook (..)
+  , UserBook (..)
   )
 
 import Core.Domain.AccountingPeriod qualified as AP
@@ -290,6 +301,95 @@ decide _book (RecordTaxEntry t) = do
     (EmptyMasterField "ETRは0以上1以下必須")
   pure [TaxEntryRecorded t]
 
+-- ── ユーザー管理 (.claude/user.md §2) ───────────────────────────────────────
+
+decide book (CreateUser actor target name role scopes) = do
+  let ub = appUsers book
+  checkValid (mkUserId (unUserId target)) InvalidUserId
+  check (Map.member target (users ub)) (DuplicateUserId target)
+  -- ブートストラップ例外: Active な Admin が1人もいなければ actor 検証を免除する
+  -- (.claude/user.md §7: 実際に発火するのを root_admin_username だけに絞るのは Shell の責務)
+  if activeAdminCount ub == 0
+    then pure [UserCreated target (ubNextUid ub) name role scopes]
+    else do
+      checkActorIsActiveAdmin ub actor
+      pure [UserCreated target (ubNextUid ub) name role scopes]
+decide book (ChangeUserRole actor target newRole) = do
+  let ub = appUsers book
+  checkActorIsActiveAdmin ub actor
+  _ <- lookupLiveUser ub target
+  check (newRole == Admin) (DirectAdminEscalationForbidden target)
+  pure [UserRoleChanged target newRole]
+decide book (ProposeRoleEscalation actor target) = do
+  let ub = appUsers book
+  checkActorIsActiveAdmin ub actor
+  _ <- lookupLiveUser ub target
+  pure [UserRoleEscalationProposed actor target]
+decide book (ApproveRoleEscalation actor target) = do
+  let ub = appUsers book
+  checkActorIsActiveAdmin ub actor
+  _ <- lookupLiveUser ub target
+  case Map.lookup target (ubPendingEscalations ub) of
+    Nothing -> Left (NoPendingRoleEscalation target)
+    Just proposer -> do
+      check (proposer == actor) (SelfApprovalNotAllowed target)
+      pure [UserRoleChanged target Admin]
+decide book (GrantUserScope actor target scope) = do
+  let ub = appUsers book
+  checkActorIsActiveAdmin ub actor
+  u <- lookupLiveUser ub target
+  check (scope `elem` userScreenScopes u) (UserScopeAlreadyGranted target scope)
+  pure [UserScopeGranted target scope]
+decide book (RevokeUserScope actor target scope) = do
+  let ub = appUsers book
+  checkActorIsActiveAdmin ub actor
+  u <- lookupLiveUser ub target
+  check (scope `notElem` userScreenScopes u) (UserScopeNotFound target scope)
+  pure [UserScopeRevoked target scope]
+decide book (SetUserPasswordHash actor target hash) = do
+  let ub = appUsers book
+  _ <- lookupLiveUser ub target
+  checkSelfOrAdmin ub actor target
+  checkNonEmpty "パスワードハッシュ" hash
+  pure [UserPasswordChanged target hash]
+decide book (RegisterUserSshKey actor target key) = do
+  let ub = appUsers book
+  _ <- lookupLiveUser ub target
+  checkSelfOrAdmin ub actor target
+  checkValid (mkSshPubKey (unSshPubKey key)) InvalidSshPubKey
+  -- 鍵共有禁止: 他ユーザーへの登録済みなら拒否。同一ユーザーへの再登録は evolve 側で冪等に吸収する。
+  let othersKeys = concatMap userSshPubKeys (Map.elems (Map.delete target (users ub)))
+  check (key `elem` othersKeys) (DuplicateSshPubKey (unSshPubKey key))
+  pure [UserSshKeyRegistered target key]
+decide book (SuspendUser actor target) = do
+  let ub = appUsers book
+  checkActorIsActiveAdmin ub actor
+  _ <- lookupLiveUser ub target
+  pure [UserSuspended target]
+decide book (ReactivateUser actor target) = do
+  let ub = appUsers book
+  checkActorIsActiveAdmin ub actor
+  _ <- lookupLiveUser ub target
+  pure [UserReactivated target]
+decide book (RemoveUser actor target) = do
+  let ub = appUsers book
+  checkActorIsActiveAdmin ub actor
+  _ <- lookupLiveUser ub target
+  pure [UserRemoved target]
+-- Shell が報告する内部コマンド群: 人間の actor を持たない。実 OS 操作の事後確認の結果のみ反映する。
+decide book (RecordUserOsSyncSucceeded target) = do
+  _ <- lookupLiveUser (appUsers book) target
+  pure [UserOsSyncSucceeded target]
+decide book (RecordUserOsSyncFailed target reason) = do
+  _ <- lookupLiveUser (appUsers book) target
+  pure [UserOsSyncFailed target reason]
+decide book (RecordUserOsDrift target detail) = do
+  _ <- lookupLiveUser (appUsers book) target
+  pure [UserOsDriftDetected target detail]
+decide book (RecordUserLoginObserved target at srcIp) = do
+  _ <- lookupLiveUser (appUsers book) target
+  pure [UserLoginObserved target at srcIp]
+
 -- ── helpers ────────────────────────────────────────────────────────────────
 
 check :: Bool -> DomainError -> Either DomainError ()
@@ -384,3 +484,36 @@ lookupAsset ab assetId compId =
 checkAssetActive :: FixedAssetId -> ComponentId -> FixedAsset -> Either DomainError ()
 checkAssetActive assetId compId fa =
   check (isJust (faDisposalDate fa)) (FixedAssetAlreadyDisposed assetId compId)
+
+-- ── ユーザー管理ヘルパー (.claude/user.md §2) ───────────────────────────────
+
+-- | Removed（終端状態）以外のユーザーを取得する。
+lookupLiveUser :: UserBook -> UserId -> Either DomainError User
+lookupLiveUser ub uid = case Map.lookup uid (users ub) of
+  Nothing -> Left (UserNotFound uid)
+  Just u
+    | userStatus u == Removed -> Left (UserAlreadyRemoved uid)
+    | otherwise -> Right u
+
+-- | actor が存在し、Active かつ Admin であることを要求する。
+checkActorIsActiveAdmin :: UserBook -> UserId -> Either DomainError ()
+checkActorIsActiveAdmin ub actor = case Map.lookup actor (users ub) of
+  Just u | isActiveAdmin u -> Right ()
+  _ -> Left (ActorNotAuthorized actor)
+
+-- | actor が target 本人、または Active な Admin であることを要求する（自己管理操作用）。
+checkSelfOrAdmin :: UserBook -> UserId -> UserId -> Either DomainError ()
+checkSelfOrAdmin ub actor target
+  | actor == target = Right ()
+  | otherwise = case Map.lookup actor (users ub) of
+      Just u | isActiveAdmin u -> Right ()
+      _ -> Left (NotSelfOrAdmin actor target)
+
+-- | 現在 Active な Admin の人数。0 ならブートストラップ例外を発火させる。
+activeAdminCount :: UserBook -> Int
+activeAdminCount ub = length (filter isActiveAdmin (Map.elems (users ub)))
+
+-- | mk* バリデータの結果を DomainError に変換する。
+checkValid :: Either T.Text a -> (T.Text -> DomainError) -> Either DomainError ()
+checkValid (Left e) mkErr = Left (mkErr e)
+checkValid (Right _) _ = Right ()

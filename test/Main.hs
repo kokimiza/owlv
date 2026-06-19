@@ -11,6 +11,7 @@ import Core.JudgmentLogSpec qualified
 import Core.MasterSpec qualified
 import Core.MaterialitySpec qualified
 import Core.SettlementSpec qualified
+import Core.UserSpec qualified
 
 main :: IO ()
 main =
@@ -26,4 +27,5 @@ main =
       , Core.FxRateSpec.tests
       , Core.JudgmentLogSpec.tests
       , Core.ClosingSpec.tests
+      , Core.UserSpec.tests
       ]

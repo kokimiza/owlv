@@ -21,6 +21,7 @@ import Core.Domain.Partner (Partner (..))
 import Core.Domain.Reconciliation (Reconciliation (..), ReconciliationItem (..))
 import Core.Domain.SubAccount (SubAccount (..))
 import Core.Domain.Tax (TaxEntry (..))
+import Core.Domain.User (OsUid (..), User (..), UserId, UserStatus (..))
 import Core.Event (Event (..))
 import Core.State
   ( AppBook (..)
@@ -34,6 +35,7 @@ import Core.State
   , MasterBook (..)
   , PeriodsBook (..)
   , TaxBook (..)
+  , UserBook (..)
   )
 
 import Core.Domain.AccountingPeriod qualified as AP
@@ -209,6 +211,62 @@ evolve book (TaxEntryRecorded t) =
     { appTax =
         TaxBook (Map.insert (teId t) t (taxEntries (appTax book)))
     }
+-- ── ユーザー管理 (.claude/user.md §2) ───────────────────────────────────────
+
+evolve book (UserCreated uid uidOs name role scopes) =
+  updateUsers book $ \ub ->
+    ub
+      { users =
+          Map.insert
+            uid
+            User
+              { userId = uid
+              , userOsUid = uidOs
+              , userDisplayName = name
+              , userRole = role
+              , userStatus = Pending
+              , userScreenScopes = scopes
+              , userPasswordHash = Nothing
+              , userSshPubKeys = []
+              }
+            (users ub)
+      , ubNextUid = OsUid (unOsUid uidOs + 1)
+      }
+evolve book (UserRoleChanged uid role) =
+  updateUsers book $ \ub ->
+    ub
+      { users = Map.adjust (\u -> u{userRole = role}) uid (users ub)
+      , ubPendingEscalations = Map.delete uid (ubPendingEscalations ub)
+      }
+evolve book (UserRoleEscalationProposed proposer target) =
+  updateUsers book $ \ub ->
+    ub{ubPendingEscalations = Map.insert target proposer (ubPendingEscalations ub)}
+evolve book (UserScopeGranted uid scope) =
+  updateUser book uid $ \u ->
+    u{userScreenScopes = scope : userScreenScopes u}
+evolve book (UserScopeRevoked uid scope) =
+  updateUser book uid $ \u ->
+    u{userScreenScopes = filter (/= scope) (userScreenScopes u)}
+evolve book (UserPasswordChanged uid hash) =
+  updateUser book uid $ \u -> u{userPasswordHash = Just hash}
+evolve book (UserSshKeyRegistered uid key) =
+  updateUser book uid $ \u ->
+    if key `elem` userSshPubKeys u
+      then u
+      else u{userSshPubKeys = key : userSshPubKeys u}
+evolve book (UserSuspended uid) =
+  updateUser book uid $ \u -> u{userStatus = Suspended}
+-- \| 再開は Pending に戻す: Active への遷移は OS 同期成功 (UserOsSyncSucceeded) のみが許される (§2.1)。
+evolve book (UserReactivated uid) =
+  updateUser book uid $ \u -> u{userStatus = Pending}
+evolve book (UserRemoved uid) =
+  updateUser book uid $ \u -> u{userStatus = Removed}
+evolve book (UserOsSyncSucceeded uid) =
+  updateUser book uid $ \u -> u{userStatus = Active}
+-- \| 失敗・ドリフト・ログイン観測はイベントストア自体が監査証跡。読みモデルの状態は変えない。
+evolve book (UserOsSyncFailed _uid _reason) = book
+evolve book (UserOsDriftDetected _uid _detail) = book
+evolve book (UserLoginObserved _uid _at _srcIp) = book
 
 -- ── helpers ────────────────────────────────────────────────────────────────
 
@@ -230,3 +288,10 @@ updateAssets book f =
 updateAsset :: AppBook -> FixedAssetId -> ComponentId -> (FixedAsset -> FixedAsset) -> AppBook
 updateAsset book assetId compId f =
   updateAssets book (Map.adjust f (assetId, compId))
+
+updateUsers :: AppBook -> (UserBook -> UserBook) -> AppBook
+updateUsers book f = book{appUsers = f (appUsers book)}
+
+updateUser :: AppBook -> UserId -> (User -> User) -> AppBook
+updateUser book uid f =
+  updateUsers book (\ub -> ub{users = Map.adjust f uid (users ub)})

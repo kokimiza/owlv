@@ -56,6 +56,15 @@ module Shell.TUI.Types
   , initSubAccForm
   , initSubAccList
 
+    -- * User master (.claude/user.md)
+  , UserFocus (..)
+  , UserFormState (..)
+  , UserListState (..)
+  , UserKeyFormState (..)
+  , initUserForm
+  , initUserList
+  , initUserKeyForm
+
     -- * Top-level
   , AppEvent (..)
   , Screen (..)
@@ -82,15 +91,16 @@ import Core.Domain.Journal (DrCr (..), JournalActionType (..), JournalEntry, Ris
 import Core.Domain.Organisation (Organisation (..), OrganisationId (..))
 import Core.Domain.Partner (Partner (..), PartnerId (..), PartnerType (..))
 import Core.Domain.SubAccount (SubAccount (..), SubAccountId (..))
+import Core.Domain.User (Role (..), User (..), UserId)
 import Core.Event (Event)
-import Core.State (MasterBook (..))
+import Core.State (MasterBook (..), UserBook (..))
 import Shell.AppError (AppError)
 import Shell.ErrorCatalog (ErrorCatalog)
 import Shell.EventStore (EventStore)
 
 -- ── Widget name hierarchy ────────────────────────────────────────────────────
 
-data MasterKind = MKOrg | MKPartner | MKAccount | MKSubAccount
+data MasterKind = MKOrg | MKPartner | MKAccount | MKSubAccount | MKUser
   deriving (Eq, Ord, Show)
 
 newtype MName = MNField Int
@@ -474,6 +484,52 @@ initSubAccList mb =
     , slSelected = 0
     }
 
+-- ── User master (.claude/user.md) ───────────────────────────────────────────
+
+data UserFocus = UFUsername | UFDisplayName | UFRole | UFSubmit | UFCancel
+  deriving (Bounded, Enum, Eq, Ord, Show)
+
+-- | 新規作成のみ（UserId は不変のため編集不可、.claude/user.md §2.1）。
+data UserFormState = UserFormState
+  { ufFocus :: UserFocus
+  , ufUsername :: E.Editor Text Name
+  , ufDisplayName :: E.Editor Text Name
+  , ufRole :: Role
+  , ufError :: Maybe AppError
+  }
+
+initUserForm :: UserFormState
+initUserForm =
+  UserFormState
+    { ufFocus = UFUsername
+    , ufUsername = mEd MKUser 0 ""
+    , ufDisplayName = mEd MKUser 1 ""
+    , ufRole = Operator
+    , ufError = Nothing
+    }
+
+data UserListState = UserListState
+  { ulUsers :: [User]
+  , ulSelected :: Int
+  , ulError :: Maybe AppError
+  }
+
+initUserList :: UserBook -> UserListState
+initUserList ub =
+  UserListState
+    { ulUsers = map snd (Map.toAscList (users ub))
+    , ulSelected = 0
+    , ulError = Nothing
+    }
+
+-- | 選択中ユーザーへの SSH 公開鍵追加フォーム（単一フィールド）。
+newtype UserKeyFormState = UserKeyFormState
+  { ukfKey :: E.Editor Text Name
+  }
+
+initUserKeyForm :: UserKeyFormState
+initUserKeyForm = UserKeyFormState{ukfKey = mEd MKUser 2 ""}
+
 -- ── Async app events ─────────────────────────────────────────────────────────
 
 -- | Events produced by worker threads and delivered to brick via BChan.
@@ -496,6 +552,9 @@ data Screen
   | ScreenAccountForm AccountFormState
   | ScreenSubAccList SubAccListState
   | ScreenSubAccForm SubAccFormState
+  | ScreenUserList UserListState
+  | ScreenUserForm UserFormState
+  | ScreenUserKeyForm User UserKeyFormState
   | ScreenVoucherSearch VoucherSearchState
   | ScreenVoucherResult VoucherResultState
   | ScreenVoucherDetail JournalEntry VoucherResultState
@@ -507,6 +566,8 @@ data AppState = AppState
   , appChan :: BChan AppEvent -- worker → brick event channel
   , appMasters :: MasterBook
   , appCatalog :: ErrorCatalog
+  , appCurrentUser :: UserId -- .claude/user.md §4.1: SSH 確立時に解決済みの actor
+  , appCurrentRole :: Role -- ユーザー管理画面の表示制御（Admin のみ）に使う
   }
 
 -- ── internal helpers ─────────────────────────────────────────────────────────

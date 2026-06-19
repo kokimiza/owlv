@@ -17,6 +17,7 @@ import Brick.Widgets.Center qualified as BC
 import Database.PostgreSQL.Simple qualified as PG
 import Graphics.Vty qualified as V
 
+import Core.Domain.User (Role, UserId)
 import Core.State (initialMasterBook)
 import Shell.CommandExecutor (loadMasterBook)
 import Shell.ErrorCatalog (defaultCatalog)
@@ -48,6 +49,14 @@ import Shell.TUI.Screen.Master.SubAccount
   , handleSubAccFormEv
   , handleSubAccListEv
   )
+import Shell.TUI.Screen.Master.User
+  ( drawUserForm
+  , drawUserKeyForm
+  , drawUserList
+  , handleUserFormEv
+  , handleUserKeyFormEv
+  , handleUserListEv
+  )
 import Shell.TUI.Screen.Menu (drawMenu, handleMenuEv)
 import Shell.TUI.Screen.VoucherSearch
   ( drawVoucherDetail
@@ -61,8 +70,8 @@ import Shell.TUI.Types
 
 -- ── Entry point ──────────────────────────────────────────────────────────────
 
-runTUI :: PG.Connection -> IO ()
-runTUI conn = do
+runTUI :: PG.Connection -> UserId -> Role -> IO ()
+runTUI conn currentUser currentRole = do
   chan <- newBChan 16
   let store = pgStore conn
       initState =
@@ -73,6 +82,8 @@ runTUI conn = do
           , appChan = chan
           , appMasters = initialMasterBook
           , appCatalog = defaultCatalog
+          , appCurrentUser = currentUser
+          , appCurrentRole = currentRole
           }
   initialVty <- mkVty V.defaultConfig
   void $ B.customMain initialVty (mkVty V.defaultConfig) (Just chan) owlvApp initState
@@ -120,7 +131,7 @@ drawUI :: AppState -> [Widget Name]
 drawUI st = case appScreen st of
   ScreenLoading -> [drawLoadingScreen]
   ScreenMenu -> [drawMenu]
-  ScreenMasterMenu -> [drawMasterMenu]
+  ScreenMasterMenu -> [drawMasterMenu (appCurrentRole st)]
   ScreenJournalForm jf -> drawJournalForm (appCatalog st) (appMasters st) jf
   ScreenOrgList ls -> [drawOrgList ls]
   ScreenOrgForm fs -> [drawOrgForm (appCatalog st) fs]
@@ -130,6 +141,9 @@ drawUI st = case appScreen st of
   ScreenAccountForm fs -> [drawAccountForm (appCatalog st) fs]
   ScreenSubAccList ls -> [drawSubAccList ls]
   ScreenSubAccForm fs -> [drawSubAccForm (appCatalog st) fs]
+  ScreenUserList ls -> [drawUserList (appCatalog st) (appCurrentRole st) ls]
+  ScreenUserForm fs -> [drawUserForm (appCatalog st) fs]
+  ScreenUserKeyForm u fs -> [drawUserKeyForm (appCatalog st) u fs]
   ScreenVoucherSearch vs -> [drawVoucherSearch (appCatalog st) vs]
   ScreenVoucherResult vr -> [drawVoucherResult (appMasters st) vr]
   ScreenVoucherDetail e _vr -> [drawVoucherDetail (appMasters st) e]
@@ -164,6 +178,9 @@ handleEvent ev = do
     ScreenAccountForm fs -> handleAccountFormEv ev fs st
     ScreenSubAccList ls -> handleSubAccListEv ev ls st
     ScreenSubAccForm fs -> handleSubAccFormEv ev fs st
+    ScreenUserList ls -> handleUserListEv ev ls st
+    ScreenUserForm fs -> handleUserFormEv ev fs st
+    ScreenUserKeyForm u fs -> handleUserKeyFormEv ev u fs st
     ScreenVoucherSearch vs -> handleVoucherSearchEv ev vs st
     ScreenVoucherResult vr -> handleVoucherResultEv ev vr st
     ScreenVoucherDetail e vr -> handleVoucherDetailEv ev e vr st

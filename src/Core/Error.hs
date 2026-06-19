@@ -16,6 +16,7 @@ import Core.Domain.Money (Money)
 import Core.Domain.OrgPermission (PermScope)
 import Core.Domain.Organisation (OrganisationId)
 import Core.Domain.Reconciliation (ReconciliationId)
+import Core.Domain.User (UserId)
 
 data DomainError
   = -- | 借貸不一致 (§4.1)
@@ -102,4 +103,34 @@ data DomainError
     DuplicateJudgmentLog JudgmentLogId
   | -- | 判断ログの必須フィールドが空
     JudgmentLogEmptyField Text
+  | {- | ユーザー管理エラー (.claude/user.md §2) ─────────────────────────
+    | ユーザー名が POSIX 制約を満たさない
+    -}
+    InvalidUserId Text
+  | -- | 同一 UserId が既に存在する
+    DuplicateUserId UserId
+  | -- | 対象ユーザーが存在しない
+    UserNotFound UserId
+  | -- | actor が存在しない、または Active な Admin ではない（昇格を除く）
+    ActorNotAuthorized UserId
+  | -- | Removed（終端状態）からの遷移を試みた
+    UserAlreadyRemoved UserId
+  | -- | Admin への昇格は ProposeRoleEscalation を経由する必要がある
+    DirectAdminEscalationForbidden UserId
+  | -- | 当該ユーザーに対する昇格提案が存在しない
+    NoPendingRoleEscalation UserId
+  | -- | 提案者自身が承認者になろうとした（自己承認）
+    SelfApprovalNotAllowed UserId
+  | -- | SSH 公開鍵がオプション接頭辞を含む等、形式が不正
+    InvalidSshPubKey Text
+  | -- | 同一の SSH 公開鍵が既に（自分または他ユーザーに）登録済み
+    DuplicateSshPubKey Text
+  | -- | actor が本人でも Admin でもない（パスワード/鍵の自己管理操作）
+    NotSelfOrAdmin UserId UserId -- actor, target
+  | -- | 画面スコープの権限変更は Admin のみ許可
+    ScopeChangeRequiresAdmin UserId
+  | -- | 同一スコープを重複して付与しようとした
+    UserScopeAlreadyGranted UserId Text
+  | -- | 存在しないスコープを剥奪しようとした
+    UserScopeNotFound UserId Text
   deriving (Eq, Show)

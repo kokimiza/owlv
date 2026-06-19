@@ -2,7 +2,8 @@ module Core.Command
   ( Command (..)
   ) where
 
-import Data.Time (Day)
+import Data.Text (Text)
+import Data.Time (Day, UTCTime)
 
 import Core.Domain.AccountMaster (AccountMaster)
 import Core.Domain.AccountingPeriod (AccountingPeriodId)
@@ -20,6 +21,7 @@ import Core.Domain.Partner (Partner)
 import Core.Domain.Reconciliation (Reconciliation, ReconciliationId)
 import Core.Domain.SubAccount (SubAccount)
 import Core.Domain.Tax (TaxEntry)
+import Core.Domain.User (Role, SshPubKey, UserId)
 
 data Command
   = RecordJournalEntry JournalEntry
@@ -74,4 +76,31 @@ data Command
     RecordBenefitLiability BenefitLiability
   | -- 法人所得税 (§4.7.16 / IAS 12) ──────────────────────────────────────
     RecordTaxEntry TaxEntry
+  | -- ユーザー管理 (.claude/user.md §2) ────────────────────────────────────
+
+    -- | actor, 新規UserId, 表示名, ロール, 画面スコープ
+    CreateUser UserId UserId Text Role [Text]
+  | -- | actor, 対象, 新ロール（Admin への変更は ProposeRoleEscalation を要求）
+    ChangeUserRole UserId UserId Role
+  | -- | actor（既存 Active Admin）, 対象 — Admin 昇格の提案 (dual control 1/2)
+    ProposeRoleEscalation UserId UserId
+  | -- | actor（提案者以外の既存 Active Admin）, 対象 — 昇格の承認 (dual control 2/2)
+    ApproveRoleEscalation UserId UserId
+  | GrantUserScope UserId UserId Text -- actor, 対象, 画面タグ
+  | RevokeUserScope UserId UserId Text -- actor, 対象, 画面タグ
+  | -- | actor（本人または Admin）, 対象, Argon2id ハッシュ済みの値
+    SetUserPasswordHash UserId UserId Text
+  | -- | actor（本人または Admin）, 対象, 公開鍵
+    RegisterUserSshKey UserId UserId SshPubKey
+  | SuspendUser UserId UserId -- actor, 対象
+  | ReactivateUser UserId UserId -- actor, 対象
+  | RemoveUser UserId UserId -- actor, 対象
+  | -- | Shell が OS 同期成功を報告する内部コマンド（人間の actor を持たない）
+    RecordUserOsSyncSucceeded UserId
+  | -- | Shell が OS 同期失敗を報告する内部コマンド（理由付き）
+    RecordUserOsSyncFailed UserId Text
+  | -- | Shell が定期検証で検出したドリフトを報告する内部コマンド
+    RecordUserOsDrift UserId Text
+  | -- | Shell が SSH 確立を観測した結果を報告する内部コマンド
+    RecordUserLoginObserved UserId UTCTime (Maybe Text)
   deriving (Eq, Show)
