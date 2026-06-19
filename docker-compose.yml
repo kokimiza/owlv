@@ -15,15 +15,15 @@ services:
     image: postgres:18-alpine
     environment:
       POSTGRES_USER: owl
-      POSTGRES_PASSWORD: owl-dev-only   # 検証専用。本番値は絶対に書かない
+      POSTGRES_PASSWORD: owl-dev-only # 検証専用。本番値は絶対に書かない
       POSTGRES_DB: owl
     volumes:
-      - pgdata:/var/lib/postgresql   # PG18+ は pg_ctlcluster 互換のためこの親ディレクトリにマウントする
+      - pgdata:/var/lib/postgresql # PG18+ は pg_ctlcluster 互換のためこの親ディレクトリにマウントする
     # ホストから psql で直接接続したい場合はコメントを外す
     ports:
       - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U owl -d owl"]
+      test: [ "CMD-SHELL", "pg_isready -U owl -d owl" ]
       interval: 2s
       timeout: 3s
       retries: 15
@@ -32,7 +32,7 @@ services:
     build: .
     depends_on:
       db:
-        condition: service_healthy     # DB 起動完了を待ってから AP を上げる
+        condition: service_healthy # DB 起動完了を待ってから AP を上げる
     environment:
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
@@ -41,8 +41,10 @@ services:
       PGUSER: owl
       PGPASSWORD: owl-dev-only
       PGDATABASE: owl
-    stdin_open: true    # TUI 必須
-    tty: true           # TUI 必須
+      OWLV_SSH_USER: owladmin
+      OWLV_ROOT_ADMIN_USERNAME: owladmin
+    stdin_open: true # TUI 必須
+    tty: true # TUI 必須
 
 volumes:
   pgdata:

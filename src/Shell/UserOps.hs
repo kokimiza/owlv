@@ -42,7 +42,8 @@ import Shell.EventStore (EventStore)
 import Shell.Interpreters.OsIdentity (getRootAdminUsernameEnv)
 import Shell.Interpreters.PasswordHash (hashPassword)
 import Shell.Interpreters.UserOsSync
-  ( SyncOutcome (..)
+  ( DesiredOsStatus (..)
+  , SyncOutcome (..)
   , UserSyncRequest (..)
   , applyAndVerify
   , defaultHelperPath
@@ -51,19 +52,19 @@ import Shell.Interpreters.UserOsSync
 createUserWithSync ::
   EventStore -> UserId -> UserId -> Text -> Role -> [Text] -> IO (Either AppError [Event])
 createUserWithSync store actor target name role scopes =
-  runCommandThenSync store (CreateUser actor target name role scopes) target "Active"
+  runCommandThenSync store (CreateUser actor target name role scopes) target OsActive
 
 suspendUserWithSync :: EventStore -> UserId -> UserId -> IO (Either AppError [Event])
 suspendUserWithSync store actor target =
-  runCommandThenSync store (SuspendUser actor target) target "Suspended"
+  runCommandThenSync store (SuspendUser actor target) target OsSuspended
 
 reactivateUserWithSync :: EventStore -> UserId -> UserId -> IO (Either AppError [Event])
 reactivateUserWithSync store actor target =
-  runCommandThenSync store (ReactivateUser actor target) target "Active"
+  runCommandThenSync store (ReactivateUser actor target) target OsActive
 
 removeUserWithSync :: EventStore -> UserId -> UserId -> IO (Either AppError [Event])
 removeUserWithSync store actor target =
-  runCommandThenSync store (RemoveUser actor target) target "Removed"
+  runCommandThenSync store (RemoveUser actor target) target OsRemoved
 
 -- | SSH 鍵登録: 本人または Admin。Active なユーザーなら即時に OS 側へ再同期する。
 registerSshKeyAsActor ::
@@ -78,7 +79,7 @@ registerSshKeyAsActor store actor target rawKey =
         Right evts -> do
           ub <- loadUserBookOrEmpty store
           syncEvts <- case Map.lookup target (users ub) of
-            Just u | userStatus u == Active -> runSyncFor store target "Active"
+            Just u | userStatus u == Active -> runSyncFor store target OsActive
             _ -> pure []
           pure (Right (evts <> syncEvts))
 
@@ -125,7 +126,7 @@ resolveSessionUser store osLoginName = case mkUserId osLoginName of
 -- ── internal ──────────────────────────────────────────────────────────────────
 
 runCommandThenSync ::
-  EventStore -> Command -> UserId -> Text -> IO (Either AppError [Event])
+  EventStore -> Command -> UserId -> DesiredOsStatus -> IO (Either AppError [Event])
 runCommandThenSync store cmd target desiredStatus = do
   result <- executeCommand store cmd
   case result of
@@ -135,7 +136,7 @@ runCommandThenSync store cmd target desiredStatus = do
       pure (Right (evts <> syncEvts))
 
 -- | OS 同期 (apply→observe→突合) を実行し、結果を報告コマンドとして発行する。
-runSyncFor :: EventStore -> UserId -> Text -> IO [Event]
+runSyncFor :: EventStore -> UserId -> DesiredOsStatus -> IO [Event]
 runSyncFor store target desiredStatus = do
   ub <- loadUserBookOrEmpty store
   case Map.lookup target (users ub) of
@@ -148,7 +149,7 @@ runSyncFor store target desiredStatus = do
               , syncRole = T.pack (show (userRole u))
               , syncStatus = desiredStatus
               , syncSshKeys =
-                  if desiredStatus == "Suspended"
+                  if desiredStatus == OsSuspended
                     then []
                     else map unSshPubKey (userSshPubKeys u)
               }

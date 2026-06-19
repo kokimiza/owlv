@@ -1,6 +1,6 @@
 # shellcheck shell=ksh
-# step 07 — 本番封鎖
-_step 7 "本番封鎖"
+# step 09 — 本番封鎖
+_step 9 "本番封鎖"
 
 # DHCP / HTTP プロビジョニングサーバーを停止
 _log "DHCP / HTTP プロビジョニングサーバーを停止..."

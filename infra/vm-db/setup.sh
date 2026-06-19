@@ -2,7 +2,7 @@
 # vm-db/setup.sh — DB VM セットアップ (PostgreSQL + RLS)
 # §4.7: ECL 計算等の元データを保持。RLS で多重テナント対応。
 # §2.1: WAL アーカイブ設定 (pg_basebackup の前提条件)
-# 実行: provision.sh の STEP 6 から SSH で呼び出す
+# 実行: provision.sh の STEP 8 から SSH で呼び出す
 set -eu
 
 _log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
@@ -27,19 +27,68 @@ DB_REPL_USER="${DB_REPL_USER:-owl_repl}"
 _log "DB VM セットアップ開始 (${OWL_DB_IP})"
 
 # ── パッケージ ────────────────────────────────────────────
+# OpenBSD のパッケージは点リリースまで含めたフル版番 (例: 18.3) でしか
+# 名前解決できず、メジャー番号だけの "postgresql-server-18" は一致しない。
+# ports は常に「現行メジャー 1 系統のみ」を postgresql-server として配布する
+# 規約 (旧メジャーは postgresql-previous-* に退避される) なので、バージョン
+# 番号を付けずにステム名だけで取得し、後段でインストールされたメジャー版が
+# PG_VERSION と一致するか検証することで再現性 (§7) を保証する
+# (実際に発生: postgresql-server-18 が見つからずインストール失敗。
+# 実際のパッケージ名は postgresql-server-18.3)。
 _log "PostgreSQL ${PG_VERSION} インストール"
-pkg_add "postgresql-server-${PG_VERSION}" "postgresql-client-${PG_VERSION}" ||
+pkg_add postgresql-server postgresql-client ||
 	_die "postgresql のインストールに失敗しました"
-_ok "PostgreSQL ${PG_VERSION}"
+_installed_pg_major=$(pkg_info | sed -n 's/^postgresql-server-\([0-9]*\)\..*/\1/p')
+[ "$_installed_pg_major" = "$PG_VERSION" ] ||
+	_die "PostgreSQL メジャー版不一致: 期待=${PG_VERSION} 実際=${_installed_pg_major:-不明} (owl-config.toml の pg_version を確認してください)"
+_ok "PostgreSQL ${_installed_pg_major} (期待バージョン ${PG_VERSION} と一致)"
+
+# ── カーネルパラメータ (System V セマフォ / 共有メモリ) ────────
+# initdb の bootstrap ステップは単独起動の postgres バックエンドを立ち上げて
+# システムカタログを構築するが、その際 SysV セマフォを確保する。OpenBSD の
+# GENERIC カーネルデフォルト (kern.seminfo.semmni=10 等) は max_connections=20
+# でも不足し、bootstrap バックエンドが semget に失敗して initdb が無言で
+# 落ちる (postgresql-server パッケージの pkg-readme が明記する既知の問題)。
+# (実際に発生: "running bootstrap script ..." の直後にエラー終了。原因は
+# initdb 呼び出しの 2>/dev/null で隠れていた)。
+_log "PostgreSQL 用カーネルパラメータを設定..."
+_PG_SYSCTL='
+kern.seminfo.semmni=60
+kern.seminfo.semmns=560
+kern.seminfo.semmnu=30
+kern.seminfo.semmsl=200
+kern.shminfo.shmmax=536870912
+kern.shminfo.shmmin=1
+kern.shminfo.shmmni=512
+kern.shminfo.shmseg=1024
+kern.shminfo.shmall=131072
+'
+# 再実行時に重複追記しないよう、owl-pg マーカー以降を一旦取り除いてから書き直す
+sed -i '/^# owl-pg sysctl (postgresql-server)$/,$d' /etc/sysctl.conf 2>/dev/null || true
+{
+	echo "# owl-pg sysctl (postgresql-server)"
+	printf '%s\n' "$_PG_SYSCTL"
+} >>/etc/sysctl.conf
+printf '%s\n' "$_PG_SYSCTL" | while IFS='=' read -r _k _v; do
+	[ -n "$_k" ] || continue
+	sysctl "${_k}=${_v}"
+done
+_ok "カーネルパラメータ設定 (/etc/sysctl.conf に永続化 + 即時反映)"
 
 # ── PostgreSQL 初期化 ─────────────────────────────────────
 _log "PostgreSQL 初期化"
 install -d -m 700 -o _postgresql /var/postgresql/data
-su -m _postgresql -c "initdb -D /var/postgresql/data --auth-local=trust --auth-host=scram-sha-256 --encoding=UTF8 --lc-collate=C --lc-ctype=C --pwprompt --no-instructions 2>/dev/null" \
-	<<'EOF'
+_initdb_log=/tmp/owl-initdb.log
+su -m _postgresql -c "initdb -D /var/postgresql/data --auth-local=trust --auth-host=scram-sha-256 --encoding=UTF8 --lc-collate=C --lc-ctype=C --pwprompt --no-instructions" \
+	<<'EOF' >"$_initdb_log" 2>&1 || {
 changeme_root_password
 changeme_root_password
 EOF
+	cat "$_initdb_log"
+	_die "initdb に失敗しました (詳細は上記出力を参照)"
+}
+cat "$_initdb_log"
+rm -f "$_initdb_log"
 _ok "initdb 完了"
 
 # ── 設定ファイルの配置 ────────────────────────────────────
@@ -63,6 +112,12 @@ fi
 # WAL アーカイブ先
 install -d -m 750 -o _postgresql /var/postgresql/wal_archive
 
+# postgresql.conf の logging_collector = on / log_directory が指すログ先。
+# ディレクトリが存在しないと postmaster がログファイルを開けず起動直後に
+# 無言で落ちる (実際に発生: rcctl start postgresql が postgresql(failed) で
+# 終了。initdb 自体は成功していたため気付きにくい)。
+install -d -m 750 -o _postgresql /var/log/postgresql
+
 # postgresql.conf のプレースホルダーを実際の値に置換
 sed -i \
 	-e "s|__DB_IP__|${OWL_DB_IP}|g" \
@@ -74,7 +129,12 @@ _ok "設定ファイル配置"
 
 # ── PostgreSQL 起動 ───────────────────────────────────────
 rcctl enable postgresql
-rcctl start postgresql
+if ! rcctl start postgresql; then
+	_log "postgresql 起動失敗 — ログを確認:"
+	tail -n 40 /var/log/postgresql/*.log 2>/dev/null | while read -r l; do _info "$l"; done
+	tail -n 40 /var/log/daemon 2>/dev/null | grep -i postgres | while read -r l; do _info "$l"; done
+	_die "rcctl start postgresql に失敗しました (詳細は上記ログを参照)"
+fi
 sleep 2
 
 # ── ユーザー・DB 作成 ─────────────────────────────────────

@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck shell=ksh
 # provision.sh — owlv ベアメタルリストア
 #
 # ━━━ 【事前準備】OpenBSD 手動インストール直後にやること ━━━━━━━━━━━━━━━━
@@ -67,16 +68,25 @@
 #   # (1) infra を /tmp/infra/ に同期 (初回以降は sets/ は除外)
 #   rsync -av --progress --exclude='sets/' infra/ <YOUR_USERNAME>@192.168.50.200:/tmp/infra/
 #
-#   # (2) SSH ログイン後、/etc/owl/ に配置して実行
+#   # (2) SSH ログイン後、/etc/owl/infra/ に配置して実行
 #   ssh <YOUR_USERNAME>@192.168.50.200
-#   doas rm -rf /etc/owl/ && doas cp -r /tmp/infra/ /etc/owl/
-#   doas sh /etc/owl/provision.sh
+#   doas rm -rf /etc/owl/infra/ && doas cp -r /tmp/infra/ /etc/owl/infra/
+#   doas sh /etc/owl/infra/provision.sh
+#
+#   ※ 重要: 削除対象は必ず /etc/owl/infra/ に限定すること。/etc/owl/ 直下には
+#     provision.sh が生成する SSH 鍵・known_hosts・改ざん検知ベースラインが
+#     置かれている。"doas rm -rf /etc/owl/" のように infra/ より上を消すと、
+#     再デプロイのたびにこれらが全損する (過去に実際に発生した事故)。
 #
 #   ※ 再実行時は rsync だけ打てば差分だけ転送される。
 #
+#   ※ SSH が途中で切れた場合、再ログイン後は同じコマンド (doas sh /etc/owl/infra/provision.sh)
+#     を打つだけでよい。各 STEP は実体 (ファイル・SSH 到達性・完了マーカー) を見て
+#     既に完了した分をスキップするため、未完了の STEP から自動的に再開する。
+#
 # ━━━ 【Yubikey が届いたら】━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #
-#   ssh <YOUR_USERNAME>@<HOST_IP> 'doas sh /etc/owl/host/security/yubikey-setup.sh'
+#   ssh <YOUR_USERNAME>@<HOST_IP> 'doas sh /etc/owl/infra/host/security/yubikey-setup.sh'
 #
 # この時点では SSH を維持する。
 # Yubikey セットアップ完了まで管理者がロックアウトされないようにするため。
@@ -108,6 +118,32 @@ _step() { printf '\n━━━ [%s/%s] %s\n' "$1" "$TOTAL" "$2"; }
 _ok() { printf '    ✓ %s\n' "$*"; }
 _info() { printf '      %s\n' "$*"; }
 _log() { printf '    [%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
+
+# 再開判定用ヘルパー: PROV_KEY / BACKUP_KEY は STEP 6 で確定するため、
+# ここでは変数参照のみ (呼び出し時点の値が使われる)。
+_ssh_quiet() {
+	local key="$1" ip="$2" cmd="$3"
+	ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+		-o ConnectTimeout=4 -o BatchMode=yes "root@${ip}" "$cmd" >/dev/null 2>&1
+}
+
+# OS インストール済み判定 (STEP 7 再実行時のディスク上書き事故を防ぐ)。
+# install.conf で PROV_PUBKEY を root に登録しているため、インストール完了直後は
+# PROV_KEY で到達できる。STEP 8 完了後は PROV_KEY が VM から削除されるため
+# BACKUP_KEY でのみ到達できる。どちらかで到達できれば「OS インストール済み」とみなす。
+_vm_os_installed() {
+	local ip="$1"
+	_ssh_quiet "$PROV_KEY" "$ip" true || _ssh_quiet "$BACKUP_KEY" "$ip" true
+}
+
+# VM 内部プロビジョニング完了判定 (STEP 8 再実行時の二重実行を防ぐ)。
+# 完了マーカーは PROV_KEY 削除前の setup.sh 完了時点で書き込む (08-vm-provision.sh 参照)。
+# /provision/ は全 VM で _vm_provision の先頭で作成されるため存在が保証されている。
+_vm_provisioned() {
+	local ip="$1"
+	_ssh_quiet "$PROV_KEY" "$ip" "test -f /provision/.owl-provisioned" ||
+		_ssh_quiet "$BACKUP_KEY" "$ip" "test -f /provision/.owl-provisioned"
+}
 
 _vmctl_status_to() {
 	local out="$1" err="${1}.err"
@@ -198,7 +234,7 @@ _log "ホスト: $(hostname)"
 
 SELF="$(cd "$(dirname "$0")" && pwd)"
 CONFIG="${SELF}/owl-config.toml"
-TOTAL=7
+TOTAL=9
 _log "provision.sh: ${SELF}/provision.sh checksum=$(cksum "$0" | awk '{print $1 ":" $2}')"
 
 [ -f "$CONFIG" ] || _die "$CONFIG が見つかりません"
@@ -233,11 +269,11 @@ _log "  internal_lan: AP=${OWL_AP_IP} DB=${OWL_DB_IP}"
 _log "  dev_lan:      Git=${OWL_GIT_IP} Build=${OWL_BUILD_IP}"
 _log "  GHC=${GHC_VERSION}  PG=${PG_VERSION}  Forgejo=${FORGEJO_VER}  Runner=${FORGEJO_RUNNER_VER}"
 
+LOGDIR=/var/log/owl
 HOST_INT_IP="10.0.1.1"
 HOST_DEV_IP="10.0.2.1"
 PROV_KEY=/etc/owl/prov_ed25519     # プロビジョニング用の使い捨て SSH 鍵
 BACKUP_KEY=/etc/owl/backup_ed25519 # DR 用の恒久 SSH 鍵 (owl-control.sh が使用)
-LOGDIR=/var/log/owl
 
 # Runner 登録シークレット: git_vm と build_vm で共有する (Web UI 不要のオフライン登録)
 # § 4.1: forgejo forgejo-cli actions register / forgejo-runner create-runner-file
@@ -258,13 +294,15 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 # ── ステップ実行 ───────────────────────────────────────────
 STEPS_DIR="${SELF}/host/steps"
 
-. "${STEPS_DIR}/01-foundation.sh"
-. "${STEPS_DIR}/02-network.sh"
-. "${STEPS_DIR}/03-disks.sh"
-. "${STEPS_DIR}/04-sshkeys.sh"
-. "${STEPS_DIR}/05-vm-install.sh"
-. "${STEPS_DIR}/06-vm-provision.sh"
-. "${STEPS_DIR}/07-lockdown.sh"
+. "${STEPS_DIR}/01-host-foundation.sh"
+. "${STEPS_DIR}/02-wan-network.sh"
+. "${STEPS_DIR}/03-virt-bootstrap.sh"
+. "${STEPS_DIR}/04-pf-nat.sh"
+. "${STEPS_DIR}/05-disks.sh"
+. "${STEPS_DIR}/06-sshkeys.sh"
+. "${STEPS_DIR}/07-vm-install.sh"
+. "${STEPS_DIR}/08-vm-provision.sh"
+. "${STEPS_DIR}/09-lockdown.sh"
 
 trap - EXIT
 
@@ -273,14 +311,18 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo " プロビジョニング完了 ✓"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo " 【Yubikey が届いたら】"
-echo "   この SSH セッションから直接実行:"
-echo "   sh /etc/owl/infra/host/security/yubikey-setup.sh"
+echo " 【残作業】host/security/ の手順を順番に実行してください。"
+echo " いずれもこの SSH セッションから直接実行可能 (sh /etc/owl/infra/host/security/<script>):"
 echo ""
-echo " 【初回セットアップの続き】"
-echo "   vm-db   : psql で owl スキーマ・RLS を適用"
-echo "   vm-git  : Forgejo CLI 初期化済 (admin ユーザー・Runner 登録完了)"
-echo "   vm-build: Forgejo Runner 起動済 (オフライン登録)"
+echo "   1. ap-admin-user.sh      vm-ap に ${OWLV_ROOT_ADMIN_USERNAME:-<root_admin_username>} の"
+echo "                            OS アカウントを作成 (owlv の初回 Admin 自動生成に必要)"
+echo "   2. db-secrets-rotate.sh  vm-db の初期パスワードをローテーションし"
+echo "                            vm-ap の db.env / db-ca.crt に伝播"
+echo "   3. git-repo-bootstrap.sh vm-git に admin/owlv リポジトリを作成"
+echo "   4. yubikey-setup.sh      Yubikey が届いたら実行 (SSH パスワード認証の全廃)"
+echo ""
+echo " 各スクリプトは何度でも再実行可能 (既に完了した分は検出してスキップする)。"
+echo " 実行順を間違えても致命的ではないが、1→2→3 の順が前提を満たしやすい。"
 echo ""
 echo " 【DR 復元の場合】"
 echo "   age identity をエスクロー (§2.3) から取り出し"

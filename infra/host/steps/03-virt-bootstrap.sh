@@ -1,51 +1,6 @@
 # shellcheck shell=ksh
-# step 01 — ホスト基盤セットアップ
-_step 1 "ホスト基盤セットアップ"
-
-install -d -m 750 /etc/owl
-install -d -m 750 "$LOGDIR"
-
-# 管理スクリプトを配置
-install -m 700 "${SELF}/host/sbin/owl-control.sh" /usr/local/sbin/owl-control.sh
-install -m 700 "${SELF}/host/sbin/owl-integrity-check.sh" /usr/local/sbin/owl-integrity-check.sh
-install -m 700 "${SELF}/host/sbin/owl-pfctl-pinhole" /usr/local/sbin/owl-pfctl-pinhole
-
-# known_hosts は provision が上書きできるよう初期化する
-install -m 600 /dev/null /etc/owl/known_hosts
-_ok "管理スクリプト配置"
-
-# 設定ファイルを配置 (doas.conf / newsyslog.conf / crontab)
-# vmd.conf は STEP 3 でディスクイメージ作成後に配置する (先に置くと起動失敗)
-# pf.conf と rc.conf.local は STEP 7 の本番封鎖時に適用する
-install -m 644 "${SELF}/host/conf/doas.conf" /etc/doas.conf
-install -m 644 "${SELF}/host/conf/newsyslog.conf" /etc/newsyslog.conf
-install -m 600 "${SELF}/host/conf/crontab" /etc/crontab
-_ok "設定ファイル配置"
-
-# owl-control 専用ユーザー
-id owl-control >/dev/null 2>&1 || useradd -s /sbin/nologin -d /nonexistent owl-control
-
-# 必要パッケージ (この時点では外向き通信が開いているので pkg_add で取得)
-pkg_add age rclone 2>/dev/null && _ok "age / rclone インストール" ||
-	_info "警告: age / rclone の自動インストール失敗。後で手動実行: pkg_add age rclone"
-
-# vmm-bios (SeaBIOS) — /etc/firmware/vmm-bios が無いと vmctl start が
-# "Cannot allocate memory" という誤った errno に化けて失敗する。
-# 正規の取得方法: fw_update vmm (ドライバ名。vmm-firmware パッケージをインストール)
-# etc79.tgz は OpenBSD 7.9 amd64 の配布物に存在しない (SHA256 に記載なし)。
-if [ -f /etc/firmware/vmm-bios ]; then
-	_ok "vmm-bios 既存 → スキップ"
-else
-	_log "/etc/firmware/vmm-bios が見つかりません — fw_update vmm で取得します..."
-	if fw_update vmm; then
-		_ok "fw_update vmm 完了 (vmm-firmware インストール済み)"
-	else
-		_die "fw_update vmm 失敗 — ネットワーク疎通と firmware.openbsd.org へのアクセスを確認してください"
-	fi
-	[ -f /etc/firmware/vmm-bios ] || _die "fw_update 後も /etc/firmware/vmm-bios が見つかりません"
-fi
-[ -r /etc/firmware/vmm-bios ] || _die "vmm-bios が読み取れません — 'fw_update vmm' を実行してください"
-chmod 644 /etc/firmware/vmm-bios 2>/dev/null || true
+# step 03 — 仮想化基盤 (vmd) 起動
+_step 3 "仮想化基盤 (vmd) 起動"
 
 # ── bridge 設定 ──────────────────────────────────────────────
 # 【超堅牢化】再実行時や前回クラッシュ時のゾンビプロセス、カーネルロックを完全に破砕する
@@ -114,7 +69,7 @@ chmod 640 /etc/hostname.bridge1
 _ok "vether0+bridge0 (${HOST_INT_IP}) / vether1+bridge1 (${HOST_DEV_IP}) 設定"
 
 # vmd をスイッチのみの最小 config で起動する
-# ディスクイメージ参照を含む完全な vm.conf は STEP 3 で配置する
+# ディスクイメージ参照を含む完全な vm.conf は STEP 7 (VM OS autoinstall) で配置する
 _log "最小 vm.conf (スイッチ定義のみ) を書き込み..."
 cat >/etc/vm.conf <<'VMDEOF'
 switch "internal_lan" {
@@ -181,7 +136,7 @@ _ok "vmd 起動 (スイッチのみ)"
 # VM の install.conf は "DNS nameservers = gateway" を指定するが、
 # ゲートウェイ (ホスト) に DNS フォワーダーがないと pkg_add が無限リトライになる。
 # unwind は base 同梱 (pkg_add 不要)。pf の rdr-to で VM の DNS クエリを
-# 127.0.0.1:53 へ転送することで gateway = DNS サーバーを実現する (step 02 参照)。
+# 127.0.0.1:53 へ転送することで gateway = DNS サーバーを実現する (STEP 4 参照)。
 _log "unwind (DNS リゾルバー) を設定・起動..."
 # unwind.conf: forwarder の区切りはスペース (コンマ不可)
 cat >/etc/unwind.conf <<'UNWINDEOF'

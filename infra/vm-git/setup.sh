@@ -2,7 +2,7 @@
 # vm-git/setup.sh — Git VM セットアップ (Forgejo + パッケージレジストリ)
 # §3.1: Forgejo はリポジトリ管理とバイナリレジストリを兼ねる
 # Forgejo Runner は vm-build で起動し、ここでは CLI によるオフライン登録まで行う
-# 実行: provision.sh の STEP 6 から SSH で呼び出す
+# 実行: provision.sh の STEP 8 から SSH で呼び出す
 set -eu
 
 _log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
@@ -54,13 +54,39 @@ if [ ! -f "$FORGEJO_BIN" ]; then
 		"https://codeberg.org/forgejo/forgejo/archive/v${FORGEJO_VERSION}.tar.gz" ||
 		_die "Forgejo ソースのダウンロードに失敗しました (v${FORGEJO_VERSION})"
 
-	mkdir -p "$FORGEJO_SRC"
-	tar xzf "${FORGEJO_SRC}.tar.gz" -C "$FORGEJO_SRC" --strip-components=1
+	# OpenBSD 標準の tar は GNU 拡張の --strip-components を解釈できず、
+	# フラグそのものを展開対象パターンとして扱って "patterns were not
+	# matched" になる (実際に発生)。アーカイブのトップレベルディレクトリを
+	# 一旦別の場所に展開し、それ自体を目的のパスへ rename することで
+	# 同等の効果を得る。
+	mkdir -p "${FORGEJO_SRC}.extract"
+	tar xzf "${FORGEJO_SRC}.tar.gz" -C "${FORGEJO_SRC}.extract"
 	rm -f "${FORGEJO_SRC}.tar.gz"
+	_forgejo_top=$(find "${FORGEJO_SRC}.extract" -mindepth 1 -maxdepth 1 -type d | head -1)
+	[ -n "$_forgejo_top" ] || _die "Forgejo ソース展開後にトップレベルディレクトリが見つかりません"
+	rm -rf "$FORGEJO_SRC"
+	mv "$_forgejo_top" "$FORGEJO_SRC"
+	rmdir "${FORGEJO_SRC}.extract" 2>/dev/null || true
+
+	# go のモジュールキャッシュ ($HOME/go = /root/go) は OpenBSD インストーラーの
+	# 自動パーティショニングで "/" に割り当てられる小さな領域に乗ってしまい、
+	# bleve (全文検索) 等の依存が肥大で容量を使い切る (実際に発生:
+	# "no space left on device" で go build が失敗)。/usr は自動レイアウトで
+	# 大きく確保される側のパーティションなので、そちら配下にキャッシュを移す。
+	_log "GOPATH/GOCACHE を /usr/local 配下へ退避 (/ パーティション枯渇回避)"
+	# 前回失敗時に /root/go へ書きかけたキャッシュが残っていると "/" を
+	# 圧迫し続けるので、再実行時のために必ず破棄しておく
+	rm -rf /root/go
+	export GOPATH=/usr/local/go-workspace
+	export GOCACHE=/usr/local/go-workspace/cache
+	install -d "$GOPATH" "$GOCACHE"
 
 	(cd "$FORGEJO_SRC" &&
 		go build -tags 'sqlite sqlite_unlock_notify' -o "$FORGEJO_BIN" .) ||
 		_die "Forgejo のビルドに失敗しました"
+
+	# ビルド専用キャッシュなので完了後は破棄してディスクを回収する
+	rm -rf "$GOPATH"
 
 	chmod 755 "$FORGEJO_BIN"
 	rm -rf "$FORGEJO_SRC"
@@ -129,10 +155,15 @@ rc_cmd $1
 EOF
 chmod 755 /etc/rc.d/forgejo
 rcctl enable forgejo
-rcctl start forgejo
+if ! rcctl start forgejo; then
+	_log "forgejo 起動失敗 — ログを確認:"
+	tail -n 40 /var/log/daemon 2>/dev/null | grep -i forgejo | while read -r l; do _info "$l"; done
+	tail -n 40 /var/log/forgejo/*.log 2>/dev/null | while read -r l; do _info "$l"; done
+	_die "rcctl start forgejo に失敗しました (詳細は上記ログを参照)"
+fi
 _ok "Forgejo 起動"
 
-# ── CLI による初期化 (Web UI 不要) ───────────────────────────
+# ── CLI による初期化 ───────────────────────────
 # INSTALL_LOCK = true で起動したため Web UI ウィザードは表示されない。
 # DB の初期化完了を待ってから管理者ユーザーと Runner をプロビジョニングする。
 _log "Forgejo DB 初期化待機 (最大 30 秒)"

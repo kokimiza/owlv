@@ -2,7 +2,7 @@
 # vm-ap/setup.sh — AP VM セットアップ (owlv TUI アプリケーション)
 # §1.4: 運用グループはシェルなし、owlv が直接起動される
 # §3.1: Forgejo レジストリからバイナリを取得してインストール
-# 実行: provision.sh の STEP 6 から SSH で呼び出す
+# 実行: provision.sh の STEP 8 から SSH で呼び出す
 set -eu
 
 _log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }

@@ -1,10 +1,18 @@
 # shellcheck shell=ksh
-# step 06 — VM 内部プロビジョニング
-_step 6 "VM 内部プロビジョニング"
+# step 08 — VM 内部プロビジョニング
+_step 8 "VM 内部プロビジョニング"
 
 _vm_provision() {
 	local vmname="$1" vmip="$2"
 	_info "-- ${vmname} (${vmip})"
+
+	# 再実行時の二重実行防止: setup.sh 完了マーカーが既にあればスキップする。
+	# (Forgejo Runner シークレットの再生成や pkg_add の再実行を避けるため)
+	if _vm_provisioned "$vmip"; then
+		_ok "${vmname} は既にプロビジョニング済み (/provision/.owl-provisioned) → スキップ"
+		return 0
+	fi
+
 	_log "[${vmname}] プロビジョニング開始"
 
 	# VM のホスト鍵を known_hosts に記録する (owl-control.sh で StrictHostKeyChecking=yes に使用)
@@ -48,7 +56,7 @@ _vm_provision() {
 	ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
 		"ping -c 2 -w 6 1.1.1.1 >/dev/null 2>&1 || { echo 'NAT 障害: 1.1.1.1 に到達不可'; exit 1; }
          ping -c 1 -w 5 cdn.openbsd.org >/dev/null 2>&1 || { echo 'DNS 障害: cdn.openbsd.org を解決できない'; exit 1; }" ||
-		_die "[${vmname}] 疎通確認失敗。ホスト側で確認: pfctl -s rules / sysctl net.inet.ip.forwarding"
+		_die "[${vmname}] 疎通確認失敗。ホスト側で確認: pfctl -s rules / sysctl net.inet.ip.forwarding / route -n show -inet (default route の有無。dhcpleased 停止後に default route が再投入されず NAT が通らない)"
 
 	# autoinstall が /etc/installurl をプロビジョニングサーバー (10.0.x.1/sets) に
 	# 設定してしまうため、pkg_add の前に公式 CDN ミラーへ上書きする
@@ -68,6 +76,11 @@ _vm_provision() {
          OWLV_ROOT_ADMIN_USERNAME='${OWLV_ROOT_ADMIN_USERNAME}' \
          sh /provision/${vmname}/setup.sh"
 	_log "[${vmname}] setup.sh 完了"
+
+	# 完了マーカーを書き込む (再実行時の二重実行防止。PROV_KEY 削除前に行う)
+	# /provision/ はこの関数の先頭で作成済みなので全 VM で存在が保証されている。
+	ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
+		"date > /provision/.owl-provisioned"
 
 	# プロビジョニング用の使い捨て鍵を VM から削除
 	_log "[${vmname}] プロビジョニング鍵を VM から削除..."

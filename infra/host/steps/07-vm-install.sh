@@ -1,6 +1,6 @@
 # shellcheck shell=ksh
-# step 05 — VM OS autoinstall
-_step 5 "VM OS autoinstall"
+# step 07 — VM OS autoinstall
+_step 7 "VM OS autoinstall"
 _log "ホストメモリ:"
 _log "  物理:   $(sysctl -n hw.physmem | awk '{printf "%d MB", $1/1024/1024}')"
 _log "  実空き: $(vmstat 2>/dev/null | awk 'END{print $4}' || echo '不明')"
@@ -230,39 +230,6 @@ _wait_ssh() {
 	_die "${ip} への SSH がタイムアウト (10 分)"
 }
 
-# 再実行時に前回の VM が残っていた場合だけ停止する。
-# この後は VM ごとにインストーラー用 vm.conf を reload し、1 台ずつ起動する。
-_log "実行中 VM をインストール前に停止..."
-
-# ① 実行中 VM を先に停止する
-_status_tmp="/tmp/owl-vmctl-preinstall.$$"
-if ! _vmctl_status_to "$_status_tmp"; then
-	_log "vmd が応答しません — /var/log/messages (直近 vmd/vmm ログ):"
-	grep -Ei 'vmd|vmm' /var/log/messages | tail -15 | while read -r l; do _log "  $l"; done
-	rm -f "$_status_tmp" "${_status_tmp}.err"
-	_die "インストール開始前に vmd が応答しません"
-fi
-_running_vms=$(awk 'NR>1 && ($(NF-1)=="running"||$(NF-1)=="starting"){print $NF}' "$_status_tmp" | tr '\n' ' ')
-if [ -n "${_running_vms}" ]; then
-	_log "実行中 VM を停止: ${_running_vms}"
-	for _vm in ${_running_vms}; do
-		vmctl stop -f "${_vm}" 2>/dev/null || true
-	done
-	# running/starting がなくなるまで待つ (stopped は vm.conf 定義 VM が永続するため無視)
-	_sw=0
-	while vmctl status 2>/dev/null |
-		awk 'NR>1 && ($(NF-1)=="running"||$(NF-1)=="starting"){f=1} END{exit !f}'; do
-		sleep 1
-		_sw=$((_sw + 1))
-		[ "$_sw" -lt 30 ] || {
-			_log "警告: 30秒後も running VM が残存 — 続行"
-			break
-		}
-	done
-	_log "全 VM stopped 状態到達 (${_sw}秒待機)"
-fi
-rm -f "$_status_tmp" "${_status_tmp}.err"
-
 # vmd が応答できる状態か確認する
 if ! _vmctl_status_ok; then
 	_log "vmd が応答しません — /var/log/messages (直近 vmd/vmm ログ):"
@@ -277,10 +244,51 @@ else
 fi
 rm -f "$_status_tmp" "${_status_tmp}.err"
 
-_vm_install "vm-db" "$OWL_DB_IP" "$HOST_INT_IP" "/var/vmm/db.img" "internal_lan"
-_vm_install "vm-git" "$OWL_GIT_IP" "$HOST_DEV_IP" "/var/vmm/git.img" "dev_lan"
-_vm_install "vm-build" "$OWL_BUILD_IP" "$HOST_DEV_IP" "/var/vmm/build.img" "dev_lan"
-_vm_install "vm-ap" "$OWL_AP_IP" "$HOST_INT_IP" "/var/vmm/ap.img" "internal_lan" "-comp* -x* -game* -man* done"
+# 再実行時のディスク上書き事故防止: 既に OS インストール済み (SSH 到達可能) な
+# VM は再インストールせずスキップする。意図的に作り直す場合は、対象 VM を
+# vmctl stop し、/var/vmm/<vm>.img を削除してから再実行すること。
+#
+# 重要: OS インストール済みか判定する SSH 到達性チェックは、VM を停止する
+# *前* に行うこと。以前は全 running/starting VM を一律で先に停止してから
+# 判定していたため、前回 OS インストールが成功して稼働中の VM まで巻き込んで
+# 停止され、SSH が届かなくなって「未インストール」と誤判定され、毎回ディスクが
+# 上書きされて再インストールされる事故が起きていた (実際に発生: vm-db は
+# postgresql インストール失敗で STEP 8 が落ちただけで OS は入っていたのに、
+# 再実行のたびに STEP 7 で素通りせず再インストールされていた)。
+# 再インストールが必要な VM (未インストール、または前回の中断で
+# running/starting のまま残っている) だけをここで個別に停止する。
+_vm_install_if_needed() {
+	local vmname="$1" vmip="$2" gateway="$3" disk="$4" swname="$5" setnames="${6:-}"
+	if _vm_os_installed "$vmip"; then
+		_ok "${vmname} (${vmip}) は既に SSH 到達可能 → OS インストールをスキップ"
+		return 0
+	fi
+	_vmstate=$(_vm_state_for "$vmname" || true)
+	if [ "$_vmstate" = "running" ] || [ "$_vmstate" = "starting" ]; then
+		_log "[${vmname}] SSH 到達不可だが状態は ${_vmstate} → 停止してから再インストール..."
+		vmctl stop -f "$vmname" 2>/dev/null || true
+		_sw=0
+		while :; do
+			_vmstate=$(_vm_state_for "$vmname" || true)
+			case "$_vmstate" in
+			running | stopping | starting) ;;
+			*) break ;;
+			esac
+			sleep 1
+			_sw=$((_sw + 1))
+			[ "$_sw" -lt 30 ] || {
+				_log "[${vmname}] 警告: 30秒後も ${_vmstate} のまま — 続行"
+				break
+			}
+		done
+	fi
+	_vm_install "$vmname" "$vmip" "$gateway" "$disk" "$swname" "$setnames"
+}
+
+_vm_install_if_needed "vm-db" "$OWL_DB_IP" "$HOST_INT_IP" "/var/vmm/db.img" "internal_lan"
+_vm_install_if_needed "vm-git" "$OWL_GIT_IP" "$HOST_DEV_IP" "/var/vmm/git.img" "dev_lan"
+_vm_install_if_needed "vm-build" "$OWL_BUILD_IP" "$HOST_DEV_IP" "/var/vmm/build.img" "dev_lan"
+_vm_install_if_needed "vm-ap" "$OWL_AP_IP" "$HOST_INT_IP" "/var/vmm/ap.img" "internal_lan" "-comp* -x* -game* -man* done"
 
 # 全台の OS クリーンインストールが成功した後に、完全な vm.conf を適用
 _log "全 VM の OS インストール完了。本番用 vm.conf を配置して reload します..."

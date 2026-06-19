@@ -3,7 +3,7 @@
 # §5: 物理デバイス認証の追加 (パスワード認証の全廃)
 #
 # 【実行タイミング】Yubikey 到着後、現在の SSH セッションから実行:
-#   ssh <YOUR_USERNAME>@192.168.50.200 'doas sh /etc/owl/infra/host/yubikey-setup.sh'
+#   ssh <YOUR_USERNAME>@192.168.50.200 'doas sh /etc/owl/infra/host/security/yubikey-setup.sh'
 #
 # 【前提条件】
 #   - ykman がインストール済み (pkg_add yubico-piv-tool)

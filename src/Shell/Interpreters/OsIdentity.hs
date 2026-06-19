@@ -13,6 +13,7 @@ module Shell.Interpreters.OsIdentity
   , getRootAdminUsernameEnv
   ) where
 
+import Control.Applicative ((<|>))
 import Data.Text (Text)
 import System.Environment (lookupEnv)
 import System.Posix.User (getLoginName)
@@ -22,7 +23,9 @@ import Data.Text qualified as T
 getOsLoginName :: IO Text
 getOsLoginName = do
   mSshUser <- lookupEnv "OWLV_SSH_USER"
-  case mSshUser of
+  mUser <- lookupEnv "USER"
+  mLogName <- lookupEnv "LOGNAME"
+  case mSshUser <|> mUser <|> mLogName of
     Just u -> pure (T.pack u)
     Nothing -> T.pack <$> getLoginName
 

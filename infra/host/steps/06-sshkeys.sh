@@ -1,9 +1,12 @@
 # shellcheck shell=ksh
-# step 04 — SSH 鍵生成 + autoinstall サーバー起動
-_step 4 "SSH 鍵生成"
+# step 06 — SSH 鍵生成 + autoinstall サーバー起動
+_step 6 "SSH 鍵生成"
 
-# プロビジョニング用の使い捨て鍵 (STEP 7 で削除)
+# プロビジョニング用の使い捨て鍵 (STEP 9 で削除)。
+# 再実行時に前回分が残っていると ssh-keygen が対話的に上書き確認を出して
+# 止まるため、生成前に必ず削除する (毎回作り直す前提の鍵なので安全)。
 _log "プロビジョニング鍵を生成: ${PROV_KEY}"
+rm -f "$PROV_KEY" "${PROV_KEY}.pub"
 ssh-keygen -t ed25519 -N "" -C "owl-prov-$(date +%Y%m%d)" -f "$PROV_KEY" -q
 chmod 600 "$PROV_KEY"
 PROV_PUBKEY="$(cat ${PROV_KEY}.pub)"
@@ -41,11 +44,21 @@ subnet 10.0.2.0 netmask 255.255.255.0 {
 DHCP
 # dhcpd は IP を持つ vether 上で listen する (bridge は L2 スイッチのみで IP なし)
 # rcctl restart は "enabled" なサービスにしか使えない。
-# STEP 7 で disable されている再実行時のために enable → stop(安全) → start の順にする。
+# STEP 9 で disable されている再実行時のために enable → stop(安全) → start の順にする。
 _log "dhcpd を enable → flags 設定 → 起動..."
 rcctl enable dhcpd
 rcctl set dhcpd flags "-c /tmp/dhcpd-prov.conf vether0 vether1"
 rcctl stop dhcpd 2>/dev/null || true # 再実行時の既存インスタンスを停止
+
+# レンジは 10.0.1.200-210 / 10.0.2.200-210 (各 11 個) しかない。
+# vmd は vio0 に毎回ランダム MAC を割り振るため、ベアメタルリストアの
+# 再実行を繰り返すと /var/db/dhcpd.leases に古い MAC のリースが積み上がり、
+# プール枯渇で "no free leases" になり VM の autoinstall が失敗する事故が起きる
+# (実際に発生: vm-db の vio0 が DHCP アドレスを取得できず autoinstall が進行不能)。
+# 各プロビジョニングは常に新規インストールなので古いリースは不要 → 毎回破棄する。
+_log "dhcpd.leases をリセット (古いリースによるプール枯渇を防止)..."
+: >/var/db/dhcpd.leases
+
 rcctl start dhcpd
 _log "dhcpd PID: $(pgrep -x dhcpd || echo '不明')"
 

@@ -2,7 +2,7 @@
 # vm-build/setup.sh — Build VM セットアップ (GHC + cabal + Forgejo Runner)
 # §3.1: owlv バイナリをビルドして Forgejo パッケージレジストリにアップロード
 # GHC は OpenBSD ports から取得 (バージョンは owl-config.toml の toolchain.ghc_version)
-# 実行: provision.sh の STEP 6 から SSH で呼び出す
+# 実行: provision.sh の STEP 8 から SSH で呼び出す
 set -eu
 
 _log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
@@ -55,13 +55,38 @@ if [ ! -f "$RUNNER_BIN" ]; then
 		"https://code.forgejo.org/forgejo/runner/archive/v${FORGEJO_RUNNER_VERSION}.tar.gz" ||
 		_die "Forgejo Runner ソースのダウンロードに失敗しました (v${FORGEJO_RUNNER_VERSION})"
 
-	mkdir -p "$RUNNER_SRC"
-	tar xzf "${RUNNER_SRC}.tar.gz" -C "$RUNNER_SRC" --strip-components=1
+	# OpenBSD 標準の tar は GNU 拡張の --strip-components を解釈できず、
+	# フラグそのものを展開対象パターンとして扱って "patterns were not
+	# matched" になる (実際に発生、vm-git/setup.sh と同種)。アーカイブの
+	# トップレベルディレクトリを一旦別の場所に展開し、それ自体を目的の
+	# パスへ rename することで同等の効果を得る。
+	mkdir -p "${RUNNER_SRC}.extract"
+	tar xzf "${RUNNER_SRC}.tar.gz" -C "${RUNNER_SRC}.extract"
 	rm -f "${RUNNER_SRC}.tar.gz"
+	_runner_top=$(find "${RUNNER_SRC}.extract" -mindepth 1 -maxdepth 1 -type d | head -1)
+	[ -n "$_runner_top" ] || _die "Forgejo Runner ソース展開後にトップレベルディレクトリが見つかりません"
+	rm -rf "$RUNNER_SRC"
+	mv "$_runner_top" "$RUNNER_SRC"
+	rmdir "${RUNNER_SRC}.extract" 2>/dev/null || true
+
+	# go のモジュールキャッシュ ($HOME/go = /root/go) は OpenBSD インストーラーの
+	# 自動パーティショニングで "/" に割り当てられる小さな領域に乗ってしまい、
+	# 依存の肥大で容量を使い切る (実際に発生、vm-git/setup.sh と同種:
+	# "no space left on device" で go build が失敗)。/usr は自動レイアウトで
+	# 大きく確保される側のパーティションなので、そちら配下にキャッシュを移す。
+	_log "GOPATH/GOCACHE を /usr/local 配下へ退避 (/ パーティション枯渇回避)"
+	# 前回失敗時に /root/go へ書きかけたキャッシュが残っていると "/" を
+	# 圧迫し続けるので、再実行時のために必ず破棄しておく
+	rm -rf /root/go
+	export GOPATH=/usr/local/go-workspace
+	export GOCACHE=/usr/local/go-workspace/cache
+	install -d "$GOPATH" "$GOCACHE"
 
 	(cd "$RUNNER_SRC" && go build -o "$RUNNER_BIN" .) ||
 		_die "Forgejo Runner のビルドに失敗しました"
 
+	# ビルド専用キャッシュなので完了後は破棄してディスクを回収する
+	rm -rf "$GOPATH"
 	chmod 755 "$RUNNER_BIN"
 	rm -rf "$RUNNER_SRC"
 	_ok "forgejo-runner: ${RUNNER_BIN}"

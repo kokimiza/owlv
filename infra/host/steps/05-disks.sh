@@ -1,6 +1,6 @@
 # shellcheck shell=ksh
-# step 03 — VM ディスクイメージ作成
-_step 3 "VM ディスクイメージ作成"
+# step 05 — VM ディスクイメージ作成
+_step 5 "VM ディスクイメージ作成"
 _log "ディスクイメージディレクトリ: /var/vmm"
 install -d -m 755 /var/vmm
 for spec in "ap:20G" "db:50G" "git:50G" "build:50G"; do
@@ -16,5 +16,5 @@ for spec in "ap:20G" "db:50G" "git:50G" "build:50G"; do
 	fi
 done
 
-# 完全な vm.conf の配置と reload は、競合を防ぐため STEP 5 のインストール完了後（またはSTEP 7）に後回しにします。
+# 完全な vm.conf の配置と reload は、競合を防ぐため STEP 7 のインストール完了後（またはSTEP 9）に後回しにします。
 _ok "VM ディスクイメージ準備完了"
