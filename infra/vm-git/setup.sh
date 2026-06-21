@@ -163,10 +163,14 @@ _ok "Forgejo 設定"
 _log "Forgejo サービス登録"
 cat >/etc/rc.d/forgejo <<'EOF'
 #!/bin/ksh
+# rc.subr は ksh 前提 (bash ではない。app.ini の [git] SCRIPT_TYPE と同様の理由)
 daemon="/usr/local/bin/forgejo"
 daemon_user="git"
 daemon_flags="web --config /var/forgejo/custom/conf/app.ini"
 daemon_logger="daemon.info"
+# 初回起動は SQLite スキーマの自動マイグレーション (~80 テーブル) が走り、
+# rc.subr の既定 30 秒では非力な VM 上でタイムアウトすることがある
+daemon_timeout=180
 
 . /etc/rc.d/rc.subr
 rc_cmd $1
