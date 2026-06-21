@@ -46,6 +46,7 @@ import Core.Domain.Reconciliation
   )
 import Core.Domain.SubAccount (SubAccount (..), SubAccountId (..))
 import Core.Domain.Tax (TaxEntry (..))
+import Core.Domain.Tenant (Tenant (..), TenantStatus (..))
 import Core.Domain.User
   ( Role (..)
   , SshPubKey (..)
@@ -301,25 +302,58 @@ decide _book (RecordTaxEntry t) = do
     (EmptyMasterField "ETRは0以上1以下必須")
   pure [TaxEntryRecorded t]
 
+-- ── テナント管理 (doc/tenant_isolation.md §4) ────────────────────────────────
+
+decide book (CreateTenant tenant) = do
+  check (isJust (appTenant book)) TenantAlreadyInitialized
+  checkNonEmpty "テナント名" (tenantName tenant)
+  pure [TenantCreated tenant]
+decide book (SuspendTenant actor tid) = do
+  t <- lookupCurrentTenant book
+  checkActorIsActiveAdmin (appUsers book) actor
+  check (tenantId t /= tid) (TenantIdMismatch (tenantId t) tid)
+  check (tenantStatus t == TenantStatusSuspended) (TenantAlreadySuspended tid)
+  check (tenantStatus t == TenantStatusArchived) (TenantAlreadyArchived tid)
+  pure [TenantSuspended tid]
+decide book (ArchiveTenant actor tid) = do
+  t <- lookupCurrentTenant book
+  checkActorIsActiveAdmin (appUsers book) actor
+  check (tenantId t /= tid) (TenantIdMismatch (tenantId t) tid)
+  check (tenantStatus t == TenantStatusArchived) (TenantAlreadyArchived tid)
+  pure [TenantArchived tid]
 -- ── ユーザー管理 (.claude/user.md §2) ───────────────────────────────────────
 
-decide book (CreateUser actor target name role scopes) = do
+decide book (CreateUser actor target name homeTenant role scopes) = do
   let ub = appUsers book
   checkValid (mkUserId (unUserId target)) InvalidUserId
   check (Map.member target (users ub)) (DuplicateUserId target)
   -- ブートストラップ例外: Active な Admin が1人もいなければ actor 検証を免除する
   -- (.claude/user.md §7: 実際に発火するのを root_admin_username だけに絞るのは Shell の責務)
   if activeAdminCount ub == 0
-    then pure [UserCreated target (ubNextUid ub) name role scopes]
+    then pure [UserCreated target (ubNextUid ub) name homeTenant role scopes]
     else do
       checkActorIsActiveAdmin ub actor
-      pure [UserCreated target (ubNextUid ub) name role scopes]
+      pure [UserCreated target (ubNextUid ub) name homeTenant role scopes]
 decide book (ChangeUserRole actor target newRole) = do
   let ub = appUsers book
   checkActorIsActiveAdmin ub actor
   _ <- lookupLiveUser ub target
   check (newRole == Admin) (DirectAdminEscalationForbidden target)
   pure [UserRoleChanged target newRole]
+decide book (GrantUserTenantAccess actor target tid role) = do
+  let ub = appUsers book
+  checkActorIsActiveAdmin ub actor
+  u <- lookupLiveUser ub target
+  check (Map.member tid (userTenantRoles u)) (UserTenantAccessAlreadyGranted target tid)
+  check (role == Admin) (DirectAdminEscalationForbidden target)
+  pure [UserTenantAccessGranted target tid role]
+decide book (RevokeUserTenantAccess actor target tid) = do
+  let ub = appUsers book
+  checkActorIsActiveAdmin ub actor
+  u <- lookupLiveUser ub target
+  check (tid == userHomeTenant u) (CannotRevokeHomeTenantAccess target tid)
+  check (not (Map.member tid (userTenantRoles u))) (UserTenantAccessNotFound target tid)
+  pure [UserTenantAccessRevoked target tid]
 decide book (ProposeRoleEscalation actor target) = do
   let ub = appUsers book
   checkActorIsActiveAdmin ub actor
@@ -484,6 +518,14 @@ lookupAsset ab assetId compId =
 checkAssetActive :: FixedAssetId -> ComponentId -> FixedAsset -> Either DomainError ()
 checkAssetActive assetId compId fa =
   check (isJust (faDisposalDate fa)) (FixedAssetAlreadyDisposed assetId compId)
+
+-- ── テナント管理ヘルパー (doc/tenant_isolation.md §4) ─────────────────────────
+
+-- | このストリームの Tenant を取得する。CreateTenant 未発行なら TenantNotInitialized。
+lookupCurrentTenant :: AppBook -> Either DomainError Tenant
+lookupCurrentTenant book = case appTenant book of
+  Nothing -> Left TenantNotInitialized
+  Just t -> Right t
 
 -- ── ユーザー管理ヘルパー (.claude/user.md §2) ───────────────────────────────
 

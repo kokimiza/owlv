@@ -25,11 +25,13 @@ import Brick.Widgets.Edit qualified as E
 import Data.Text qualified as T
 import Graphics.Vty qualified as Vty
 
+import Core.Domain.Tenant (defaultTenantId)
 import Core.Domain.User
   ( Role (..)
   , User (..)
   , UserId (..)
   , mkUserId
+  , roleInTenant
   )
 import Shell.AppError (AppError (..))
 import Shell.CommandExecutor (loadUserBook)
@@ -72,7 +74,7 @@ drawUserRow selected idx u =
   let isSelected = idx == selected
       nameW = B.hLimit 16 (txt (unUserId (userId u)))
       dispW = B.hLimit 20 (txt (userDisplayName u))
-      roleW = B.hLimit 12 (str (show (userRole u)))
+      roleW = B.hLimit 12 (str (maybe "-" show (roleInTenant (userHomeTenant u) u)))
       statusW = str (show (userStatus u))
       row_ = B.hBox [str " ", nameW, str " ", dispW, str " ", roleW, str " ", statusW]
   in if isSelected then withAttr focusedAttr row_ else row_
@@ -196,7 +198,8 @@ submitUser fs st = do
     Right target -> do
       result <-
         liftIO $
-          createUserWithSync (appStore st) (appCurrentUser st) target dispT (ufRole fs) []
+          -- Stage 1（doc/tenant_isolation.md §5.1）: Tenant選択UIがまだないため defaultTenantId 固定。
+          createUserWithSync (appStore st) (appCurrentUser st) target dispT defaultTenantId (ufRole fs) []
       case result of
         Left err -> B.put st{appScreen = ScreenUserForm fs{ufError = Just err}}
         Right _ -> backToUserList st

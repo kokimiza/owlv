@@ -22,6 +22,7 @@ import Core.Domain.Partner (Partner)
 import Core.Domain.Reconciliation (Reconciliation, ReconciliationId)
 import Core.Domain.SubAccount (SubAccount)
 import Core.Domain.Tax (TaxEntry)
+import Core.Domain.Tenant (Tenant, TenantId)
 import Core.Domain.User (OsUid, Role, SshPubKey, UserId)
 
 data Event
@@ -65,14 +66,21 @@ data Event
     BenefitLiabilityRecorded BenefitLiability
   | -- 法人所得税 (§4.7.16) ─────────────────────────────────────────────
     TaxEntryRecorded TaxEntry
+  | -- テナント管理 (doc/tenant_isolation.md §4) ─────────────────────────────
+    TenantCreated Tenant
+  | TenantSuspended TenantId
+  | TenantArchived TenantId
   | -- ユーザー管理 (.claude/user.md §2) ────────────────────────────────────
-    UserCreated UserId OsUid Text Role [Text]
+    UserCreated UserId OsUid Text TenantId Role [Text]
   | UserRoleChanged UserId Role
   | UserRoleEscalationProposed
       -- | 提案者
       UserId
       -- | 対象
       UserId
+  | -- | doc/tenant_isolation.md §5.2: ホームテナント以外への横断アクセス付与
+    UserTenantAccessGranted UserId TenantId Role
+  | UserTenantAccessRevoked UserId TenantId
   | UserScopeGranted UserId Text
   | UserScopeRevoked UserId Text
   | UserPasswordChanged UserId Text
@@ -178,13 +186,21 @@ instance ToJSON Event where
   -- 法人所得税
   toJSON (TaxEntryRecorded t) =
     object ["type" .= ("TaxEntryRecorded" :: Text), "data" .= t]
+  -- テナント管理
+  toJSON (TenantCreated t) =
+    object ["type" .= ("TenantCreated" :: Text), "data" .= t]
+  toJSON (TenantSuspended tid) =
+    object ["type" .= ("TenantSuspended" :: Text), "tenantId" .= tid]
+  toJSON (TenantArchived tid) =
+    object ["type" .= ("TenantArchived" :: Text), "tenantId" .= tid]
   -- ユーザー管理
-  toJSON (UserCreated uid uidOs name role scopes) =
+  toJSON (UserCreated uid uidOs name homeTenant role scopes) =
     object
       [ "type" .= ("UserCreated" :: Text)
       , "userId" .= uid
       , "osUid" .= uidOs
       , "name" .= name
+      , "homeTenant" .= homeTenant
       , "role" .= role
       , "scopes" .= scopes
       ]
@@ -195,6 +211,19 @@ instance ToJSON Event where
       [ "type" .= ("UserRoleEscalationProposed" :: Text)
       , "proposer" .= proposer
       , "target" .= target
+      ]
+  toJSON (UserTenantAccessGranted uid tid role) =
+    object
+      [ "type" .= ("UserTenantAccessGranted" :: Text)
+      , "userId" .= uid
+      , "tenantId" .= tid
+      , "role" .= role
+      ]
+  toJSON (UserTenantAccessRevoked uid tid) =
+    object
+      [ "type" .= ("UserTenantAccessRevoked" :: Text)
+      , "userId" .= uid
+      , "tenantId" .= tid
       ]
   toJSON (UserScopeGranted uid scope) =
     object ["type" .= ("UserScopeGranted" :: Text), "userId" .= uid, "scope" .= scope]
@@ -287,17 +316,26 @@ instance FromJSON Event where
       "BenefitLiabilityRecorded" -> BenefitLiabilityRecorded <$> o .: "data"
       -- 法人所得税
       "TaxEntryRecorded" -> TaxEntryRecorded <$> o .: "data"
+      -- テナント管理
+      "TenantCreated" -> TenantCreated <$> o .: "data"
+      "TenantSuspended" -> TenantSuspended <$> o .: "tenantId"
+      "TenantArchived" -> TenantArchived <$> o .: "tenantId"
       -- ユーザー管理
       "UserCreated" ->
         UserCreated
           <$> o .: "userId"
           <*> o .: "osUid"
           <*> o .: "name"
+          <*> o .: "homeTenant"
           <*> o .: "role"
           <*> o .: "scopes"
       "UserRoleChanged" -> UserRoleChanged <$> o .: "userId" <*> o .: "role"
       "UserRoleEscalationProposed" ->
         UserRoleEscalationProposed <$> o .: "proposer" <*> o .: "target"
+      "UserTenantAccessGranted" ->
+        UserTenantAccessGranted <$> o .: "userId" <*> o .: "tenantId" <*> o .: "role"
+      "UserTenantAccessRevoked" ->
+        UserTenantAccessRevoked <$> o .: "userId" <*> o .: "tenantId"
       "UserScopeGranted" -> UserScopeGranted <$> o .: "userId" <*> o .: "scope"
       "UserScopeRevoked" -> UserScopeRevoked <$> o .: "userId" <*> o .: "scope"
       "UserPasswordChanged" -> UserPasswordChanged <$> o .: "userId" <*> o .: "hash"

@@ -21,6 +21,7 @@ import Core.Domain.Partner (Partner)
 import Core.Domain.Reconciliation (Reconciliation, ReconciliationId)
 import Core.Domain.SubAccount (SubAccount)
 import Core.Domain.Tax (TaxEntry)
+import Core.Domain.Tenant (Tenant, TenantId)
 import Core.Domain.User (Role, SshPubKey, UserId)
 
 data Command
@@ -76,16 +77,28 @@ data Command
     RecordBenefitLiability BenefitLiability
   | -- 法人所得税 (§4.7.16 / IAS 12) ──────────────────────────────────────
     RecordTaxEntry TaxEntry
+  | -- テナント管理 (doc/tenant_isolation.md §4) ─────────────────────────────
+
+    -- | ストリームの先頭イベントとして記録される、Tenant自身のライフサイクル開始
+    CreateTenant Tenant
+  | -- | actor（対象Tenantの Active Admin）, 対象TenantId
+    SuspendTenant UserId TenantId
+  | -- | actor（対象Tenantの Active Admin）, 対象TenantId
+    ArchiveTenant UserId TenantId
   | -- ユーザー管理 (.claude/user.md §2) ────────────────────────────────────
 
-    -- | actor, 新規UserId, 表示名, ロール, 画面スコープ
-    CreateUser UserId UserId Text Role [Text]
-  | -- | actor, 対象, 新ロール（Admin への変更は ProposeRoleEscalation を要求）
+    -- | actor, 新規UserId, 表示名, 所属Tenant（ホーム）, ロール, 画面スコープ
+    CreateUser UserId UserId Text TenantId Role [Text]
+  | -- | actor, 対象, 新ロール（Admin への変更は ProposeRoleEscalation を要求）— ホームテナントのロールを変更する
     ChangeUserRole UserId UserId Role
   | -- | actor（既存 Active Admin）, 対象 — Admin 昇格の提案 (dual control 1/2)
     ProposeRoleEscalation UserId UserId
   | -- | actor（提案者以外の既存 Active Admin）, 対象 — 昇格の承認 (dual control 2/2)
     ApproveRoleEscalation UserId UserId
+  | -- | actor（Active Admin）, 対象, 付与するTenant, ロール — ホームテナント以外への横断アクセス (doc/tenant_isolation.md §5.2)
+    GrantUserTenantAccess UserId UserId TenantId Role
+  | -- | actor（Active Admin）, 対象, 剥奪するTenant — ホームテナントは剥奪不可
+    RevokeUserTenantAccess UserId UserId TenantId
   | GrantUserScope UserId UserId Text -- actor, 対象, 画面タグ
   | RevokeUserScope UserId UserId Text -- actor, 対象, 画面タグ
   | -- | actor（本人または Admin）, 対象, Argon2id ハッシュ済みの値

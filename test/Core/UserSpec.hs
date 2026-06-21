@@ -8,6 +8,7 @@ import Data.Text qualified as T
 
 import Core.Command (Command (..))
 import Core.Decide (decide)
+import Core.Domain.Tenant (defaultTenantId)
 import Core.Domain.User
   ( OsUid (..)
   , Role (..)
@@ -47,7 +48,7 @@ bookWithAdmin =
   foldl'
     evolve
     initialAppBook
-    [ UserCreated admin1 firstOsUid "Admin One" Admin []
+    [ UserCreated admin1 firstOsUid "Admin One" defaultTenantId Admin []
     , UserOsSyncSucceeded admin1
     ]
 
@@ -72,10 +73,10 @@ tests =
 bootstrapTests :: [TestTree]
 bootstrapTests =
   [ testCase "Active な Admin が0人なら actor 検証を免除して作成できる" $
-      decide initialAppBook (CreateUser admin1 admin1 "Admin One" Admin [])
-        @?= Right [UserCreated admin1 firstOsUid "Admin One" Admin []]
+      decide initialAppBook (CreateUser admin1 admin1 "Admin One" defaultTenantId Admin [])
+        @?= Right [UserCreated admin1 firstOsUid "Admin One" defaultTenantId Admin []]
   , testCase "Active な Admin が既にいれば actor を要求する" $
-      case decide bookWithAdmin (CreateUser bob bob "Bob" Operator []) of
+      case decide bookWithAdmin (CreateUser bob bob "Bob" defaultTenantId Operator []) of
         Left (ActorNotAuthorized actor) -> actor @?= bob
         other -> assertFailure ("expected ActorNotAuthorized, got: " <> show other)
   ]
@@ -85,11 +86,12 @@ bootstrapTests =
 createTests :: [TestTree]
 createTests =
   [ testCase "Admin actor による新規作成は成功する" $
-      decide bookWithAdmin (CreateUser admin1 alice "Alice" Operator [])
-        @?= Right [UserCreated alice (ubNextUid (appUsers bookWithAdmin)) "Alice" Operator []]
+      decide bookWithAdmin (CreateUser admin1 alice "Alice" defaultTenantId Operator [])
+        @?= Right
+          [UserCreated alice (ubNextUid (appUsers bookWithAdmin)) "Alice" defaultTenantId Operator []]
   , testCase "重複 UserId は DuplicateUserId" $
-      let book = foldl' evolve bookWithAdmin [UserCreated alice firstOsUid "Alice" Operator []]
-      in case decide book (CreateUser admin1 alice "Alice2" Operator []) of
+      let book = foldl' evolve bookWithAdmin [UserCreated alice firstOsUid "Alice" defaultTenantId Operator []]
+      in case decide book (CreateUser admin1 alice "Alice2" defaultTenantId Operator []) of
            Left (DuplicateUserId target) -> target @?= alice
            other -> assertFailure ("expected DuplicateUserId, got: " <> show other)
   ]
@@ -98,7 +100,7 @@ createTests =
 
 roleEscalationTests :: [TestTree]
 roleEscalationTests =
-  let book0 = foldl' evolve bookWithAdmin [UserCreated alice firstOsUid "Alice" Operator []]
+  let book0 = foldl' evolve bookWithAdmin [UserCreated alice firstOsUid "Alice" defaultTenantId Operator []]
   in [ testCase "ChangeUserRole で直接 Admin にはできない" $
          case decide book0 (ChangeUserRole admin1 alice Admin) of
            Left (DirectAdminEscalationForbidden target) -> target @?= alice
@@ -117,7 +119,7 @@ roleEscalationTests =
                foldl'
                  evolve
                  book0
-                 [ UserCreated admin2 firstOsUid "Admin Two" Admin []
+                 [ UserCreated admin2 firstOsUid "Admin Two" defaultTenantId Admin []
                  , UserOsSyncSucceeded admin2
                  , UserRoleEscalationProposed admin1 alice
                  ]
@@ -128,7 +130,7 @@ roleEscalationTests =
 
 lifecycleTests :: [TestTree]
 lifecycleTests =
-  let book0 = foldl' evolve bookWithAdmin [UserCreated alice firstOsUid "Alice" Operator []]
+  let book0 = foldl' evolve bookWithAdmin [UserCreated alice firstOsUid "Alice" defaultTenantId Operator []]
   in [ testCase "Suspend は成功する" $
          decide book0 (SuspendUser admin1 alice) @?= Right [UserSuspended alice]
      , testCase "Removed からの操作はすべて UserAlreadyRemoved" $
@@ -146,7 +148,7 @@ lifecycleTests =
 
 sshKeyTests :: [TestTree]
 sshKeyTests =
-  let book0 = foldl' evolve bookWithAdmin [UserCreated alice firstOsUid "Alice" Operator []]
+  let book0 = foldl' evolve bookWithAdmin [UserCreated alice firstOsUid "Alice" defaultTenantId Operator []]
   in [ testCase "オプション付き鍵文字列は mkSshPubKey で拒否される" $
          case mkSshPubKey (T.pack "command=\"/bin/sh\" ssh-ed25519 AAAA") of
            Left _ -> pure ()
@@ -159,7 +161,7 @@ sshKeyTests =
                foldl'
                  evolve
                  book0
-                 [ UserCreated bob firstOsUid "Bob" Operator []
+                 [ UserCreated bob firstOsUid "Bob" defaultTenantId Operator []
                  , UserSshKeyRegistered bob (key "ssh-ed25519 AAAAshared")
                  ]
          in case decide book1 (RegisterUserSshKey alice alice (key "ssh-ed25519 AAAAshared")) of
@@ -175,8 +177,8 @@ selfOrAdminTests =
         foldl'
           evolve
           bookWithAdmin
-          [ UserCreated alice firstOsUid "Alice" Operator []
-          , UserCreated bob firstOsUid "Bob" Operator []
+          [ UserCreated alice firstOsUid "Alice" defaultTenantId Operator []
+          , UserCreated bob firstOsUid "Bob" defaultTenantId Operator []
           ]
   in [ testCase "本人によるパスワード変更は成功する" $
          decide book0 (SetUserPasswordHash alice alice "hash")
@@ -194,7 +196,7 @@ selfOrAdminTests =
 
 scopeTests :: [TestTree]
 scopeTests =
-  let book0 = foldl' evolve bookWithAdmin [UserCreated alice firstOsUid "Alice" Operator []]
+  let book0 = foldl' evolve bookWithAdmin [UserCreated alice firstOsUid "Alice" defaultTenantId Operator []]
   in [ testCase "スコープ付与は成功する" $
          decide book0 (GrantUserScope admin1 alice "journal")
            @?= Right [UserScopeGranted alice "journal"]
@@ -214,21 +216,21 @@ scopeTests =
 evolveTests :: [TestTree]
 evolveTests =
   [ testCase "UserCreated 直後は Pending" $
-      let book = evolve initialAppBook (UserCreated alice firstOsUid "Alice" Operator [])
+      let book = evolve initialAppBook (UserCreated alice firstOsUid "Alice" defaultTenantId Operator [])
       in lookupStatus book alice @?= Just "Pending"
   , testCase "UserOsSyncSucceeded で Active になる" $
       let book =
             foldl'
               evolve
               initialAppBook
-              [UserCreated alice firstOsUid "Alice" Operator [], UserOsSyncSucceeded alice]
+              [UserCreated alice firstOsUid "Alice" defaultTenantId Operator [], UserOsSyncSucceeded alice]
       in lookupStatus book alice @?= Just "Active"
   , testCase "UserReactivated は Active ではなく Pending に戻す（再同期必須）" $
       let book =
             foldl'
               evolve
               initialAppBook
-              [ UserCreated alice firstOsUid "Alice" Operator []
+              [ UserCreated alice firstOsUid "Alice" defaultTenantId Operator []
               , UserOsSyncSucceeded alice
               , UserSuspended alice
               , UserReactivated alice
@@ -239,7 +241,7 @@ evolveTests =
             foldl'
               evolve
               initialAppBook
-              [ UserCreated alice firstOsUid "Alice" Operator []
+              [ UserCreated alice firstOsUid "Alice" defaultTenantId Operator []
               , UserRemoved alice
               ]
       in ubNextUid (appUsers book) @?= succUid firstOsUid

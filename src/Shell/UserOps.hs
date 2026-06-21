@@ -23,6 +23,13 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 
 import Core.Command (Command (..))
+import Core.Domain.Tenant
+  ( Tenant (..)
+  , TenantId
+  , TenantKind (..)
+  , TenantStatus (..)
+  , defaultTenantId
+  )
 import Core.Domain.User
   ( OsUid (..)
   , Role (Admin)
@@ -33,6 +40,7 @@ import Core.Domain.User
   , isActiveAdmin
   , mkSshPubKey
   , mkUserId
+  , roleInTenant
   )
 import Core.Event (Event)
 import Core.State (UserBook (..), initialUserBook)
@@ -50,9 +58,9 @@ import Shell.Interpreters.UserOsSync
   )
 
 createUserWithSync ::
-  EventStore -> UserId -> UserId -> Text -> Role -> [Text] -> IO (Either AppError [Event])
-createUserWithSync store actor target name role scopes =
-  runCommandThenSync store (CreateUser actor target name role scopes) target OsActive
+  EventStore -> UserId -> UserId -> Text -> TenantId -> Role -> [Text] -> IO (Either AppError [Event])
+createUserWithSync store actor target name homeTenant role scopes =
+  runCommandThenSync store (CreateUser actor target name homeTenant role scopes) target OsActive
 
 suspendUserWithSync :: EventStore -> UserId -> UserId -> IO (Either AppError [Event])
 suspendUserWithSync store actor target =
@@ -109,7 +117,11 @@ resolveSessionUser store osLoginName = case mkUserId osLoginName of
   Right uid -> do
     ub <- loadUserBookOrEmpty store
     case Map.lookup uid (users ub) of
-      Just u | userStatus u == Active -> pure (Right (uid, userRole u))
+      Just u | userStatus u == Active ->
+        case roleInTenant (userHomeTenant u) u of
+          Just role -> pure (Right (uid, role))
+          -- 不変条件違反（ホームテナントのグラントは常に存在するはず）。安全側に拒否する。
+          Nothing -> pure (Left ("ユーザーのホームテナント権限が見つかりません: " <> osLoginName))
       Just u ->
         pure (Left ("このユーザーは現在 " <> T.pack (show (userStatus u)) <> " 状態です: " <> osLoginName))
       Nothing -> do
@@ -117,11 +129,30 @@ resolveSessionUser store osLoginName = case mkUserId osLoginName of
         let activeAdminCount = length (filter isActiveAdmin (Map.elems (users ub)))
         if activeAdminCount == 0 && mRootAdmin == Just osLoginName
           then do
-            result <- createUserWithSync store uid uid osLoginName Admin []
+            -- Stage 1（doc/tenant_isolation.md §5.1）: Tenant選択UIがまだないため
+            -- ブートストラップ管理者の所属は defaultTenantId とする。CreateTenant が
+            -- そのTenantストリームの先頭イベントであるという不変条件 (§4) を満たすため、
+            -- ユーザー作成前に必ずTenantを存在させる（2回目以降はTenantAlreadyInitialized
+            -- を無視する単純な ensure）。
+            _ <- ensureDefaultTenant store
+            result <- createUserWithSync store uid uid osLoginName defaultTenantId Admin []
             case result of
               Left err -> pure (Left (T.pack (show err)))
               Right _ -> pure (Right (uid, Admin))
           else pure (Left ("owlv ユーザーが登録されていません: " <> osLoginName))
+
+-- | defaultTenantId が未初期化なら作成する。既に存在する場合のエラーは無視する。
+ensureDefaultTenant :: EventStore -> IO ()
+ensureDefaultTenant store = do
+  let tenant =
+        Tenant
+          { tenantId = defaultTenantId
+          , tenantName = "Default"
+          , tenantStatus = TenantStatusActive
+          , tenantKind = StandaloneTenant
+          }
+  _ <- executeCommand store (CreateTenant tenant)
+  pure ()
 
 -- ── internal ──────────────────────────────────────────────────────────────────
 
@@ -142,11 +173,12 @@ runSyncFor store target desiredStatus = do
   case Map.lookup target (users ub) of
     Nothing -> pure []
     Just u -> do
-      let req =
+      let homeRole = roleInTenant (userHomeTenant u) u
+          req =
             UserSyncRequest
               { syncUsername = unUserId target
               , syncUid = unOsUid (userOsUid u)
-              , syncRole = T.pack (show (userRole u))
+              , syncRole = maybe "" (T.pack . show) homeRole
               , syncStatus = desiredStatus
               , syncSshKeys =
                   if desiredStatus == OsSuspended

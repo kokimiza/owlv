@@ -1,44 +1,43 @@
 {- | Append-only event store backed by PostgreSQL, with optimistic concurrency control.
 
-Schema (run once per database, handled by migrate; full design notes in
-infra/vm-db/doc/event-store.md):
-  CREATE TABLE IF NOT EXISTS events (
-    seq          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    event_id     UUID        NOT NULL DEFAULT uuidv7(),
-    event_type   TEXT        NOT NULL,
-    payload      JSONB       NOT NULL,
-    payload_type TEXT GENERATED ALWAYS AS (payload ->> 'type') VIRTUAL,
-    recorded_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
-    CONSTRAINT events_type_matches_payload
-      CHECK (payload_type IS NULL OR payload_type = event_type)
-  );
-  CREATE UNIQUE INDEX IF NOT EXISTS events_event_id_key ON events (event_id);
-  CREATE INDEX IF NOT EXISTS events_event_type_seq_idx ON events (event_type, seq);
-  CREATE INDEX IF NOT EXISTS events_recorded_at_idx ON events (recorded_at);
-  CREATE TABLE IF NOT EXISTS stream_version (
-    id      INT    PRIMARY KEY,
-    version BIGINT NOT NULL DEFAULT 0,
-    CONSTRAINT stream_version_singleton CHECK (id = 1)
-  );
+Two physical streams share one `events` table, distinguished by the
+`tenant_id` column (doc/tenant_isolation.md §4, §6):
+
+  * Tenant stream: `tenant_id` is the owning Tenant. `TenantCreated` is the
+    first event of a Tenant's own stream (it is not a separate "control
+    plane" — see §4 for why that was rejected).
+  * Identity stream: `tenant_id IS NULL`. Holds the User registry only,
+    shared across all Tenants, because `UserId` is the OS account name and
+    the AP VM has exactly one Unix namespace (§4.1).
+
+Full DDL lives in infra/vm-db/schema.sql (applied by an operator as the
+`owl_migrator` role — see doc/tenant_isolation.md §6.4 for why `owl_app`,
+the runtime role this module connects as, must not own the tables: RLS is
+not enforced against a table's owner). `runMigration` below is the same DDL
+exposed for ad-hoc/dev use; keep the two in sync.
 
 Connection is configured via libpq environment variables:
   PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD
 
 Optimistic concurrency:
-  esLoad returns the current StreamVersion alongside events.
-  esAppend takes the expected StreamVersion; if another writer has already
-  advanced the version, it returns Left AppConcurrencyConflict without writing.
+  esLoad returns the current StreamVersion (one counter per physical
+  stream) alongside the merged, seq-ordered event list.
+  esAppend takes the expected StreamVersion; for each physical stream that
+  the given events actually touch, it locks that stream's counter row and
+  compares it against the expected value. A mismatch on either touched
+  counter returns Left AppConcurrencyConflict without writing anything.
   CommandExecutor retries the full load→decide→append cycle on conflict.
 -}
 module Shell.EventStore
   ( StreamVersion (..)
   , EventStore (..)
-  , connectAndMigrate
-  , pgStore
-  , newPostgresEventStore
+  , connectDb
+  , forTenant
+  , runMigration
   ) where
 
 import Control.Exception (SomeException, try)
+import Control.Monad (unless, void)
 import Data.Int (Int64)
 import Data.Text (Text)
 
@@ -50,159 +49,239 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple qualified as PG
 
-import Core.Event (Event)
+import Core.Domain.Tenant (Tenant (..), TenantId (..), TenantKind (..), TenantStatus (..))
+import Core.Event (Event (..))
 import Shell.AppError (AppError (..))
+import Shell.EventClassification (isIdentityEvent)
 
--- | ストリームのイベント追記回数。楽観ロックの比較値として使う。
-newtype StreamVersion = StreamVersion Int64
+-- | Tenant stream と Identity stream、それぞれの追記回数。楽観ロックの比較値。
+data StreamVersion = StreamVersion
+  { svTenant :: Int64
+  , svIdentity :: Int64
+  }
   deriving (Eq, Ord, Show)
 
 {- | Interface for the append-only event store.
 esLoad returns the current version together with events.
 esAppend takes the expected version and returns AppConcurrencyConflict when
-another writer has already advanced the stream.
+another writer has already advanced a stream that this append touches.
 -}
 data EventStore = EventStore
   { esLoad :: IO (Either AppError (StreamVersion, [Event]))
   , esAppend :: StreamVersion -> [Event] -> IO (Either AppError ())
   }
 
-{- | Connect to PostgreSQL and run schema migration. Returns the raw connection
-so callers can pass it to both pgStore and the effectful interpreters.
+{- | Connect to PostgreSQL. No DDL here — schema migration is an explicit,
+separately-run operator step (infra/vm-db/schema.sql / runMigration),
+because the runtime role this connects as (`owl_app`) must not own the
+tables it queries (doc/tenant_isolation.md §6.4).
 -}
-connectAndMigrate :: IO (Either AppError PG.Connection)
-connectAndMigrate = do
+connectDb :: IO (Either AppError PG.Connection)
+connectDb = do
   result <- try @SomeException (PG.connectPostgreSQL "")
-  case result of
+  pure $ case result of
     Left ex ->
-      pure
-        ( Left
-            ( AppStorageError
-                ( T.unlines
-                    [ "PostgreSQL 接続失敗"
-                    , ""
-                    , "接続情報を libpq 環境変数で設定してください:"
-                    , "  export PGHOST=localhost"
-                    , "  export PGPORT=5432"
-                    , "  export PGDATABASE=owlv"
-                    , "  export PGUSER=postgres"
-                    , "  export PGPASSWORD=..."
-                    , ""
-                    , "詳細: " <> T.pack (show ex)
-                    ]
-                )
+      Left
+        ( AppStorageError
+            ( T.unlines
+                [ "PostgreSQL 接続失敗"
+                , ""
+                , "接続情報を libpq 環境変数で設定してください:"
+                , "  export PGHOST=localhost"
+                , "  export PGPORT=5432"
+                , "  export PGDATABASE=owl"
+                , "  export PGUSER=owl_app"
+                , "  export PGPASSWORD=..."
+                , ""
+                , "スキーマが未適用の場合は infra/vm-db/schema.sql を owl_migrator で適用してください。"
+                , ""
+                , "詳細: " <> T.pack (show ex)
+                ]
             )
         )
-    Right conn -> do
-      migResult <- try @SomeException (migrate conn)
-      case migResult of
-        Left ex -> pure (Left (AppStorageError (T.pack (show ex))))
-        Right () -> pure (Right conn)
+    Right conn -> Right conn
 
--- | Wrap a connection in the record-of-functions interface.
-pgStore :: PG.Connection -> EventStore
-pgStore = mkPgStore
+{- | 指定 Tenant に束縛された EventStore を作る (doc/tenant_isolation.md §5.3)。
+呼び出し側に生の TenantId を都度渡せる API にはしない —— この関数が返す
+EventStore の値そのものが「すでにどの会社の帳簿か確定済みのハンドル」になる
+ようにし、`esLoad`/`esAppend` の呼び出し側で TenantId を渡し間違える余地を
+構造的に無くす。RLS 用のセッション変数 `app.tenant_id` をここで一度だけ
+設定し、以後この EventStore の生存期間中はクロージャに束縛されたままにする。
+-}
+forTenant :: PG.Connection -> TenantId -> IO (Either AppError EventStore)
+forTenant conn tid = do
+  -- バインドパラメータ必須（doc/tenant_isolation.md §5.3: SQLインジェクション対策）。
+  result <-
+    try @SomeException $
+      PG.execute conn "SELECT set_config('app.tenant_id', ?, false)" (PG.Only (unTenantId tid))
+  pure $ case result of
+    Left ex -> Left (AppStorageError (T.pack (show ex)))
+    Right _ -> Right (mkTenantStore conn tid)
 
--- | Convenience: connect, migrate, and build the EventStore record.
-newPostgresEventStore :: IO (Either AppError EventStore)
-newPostgresEventStore = fmap (fmap mkPgStore) connectAndMigrate
-
--- ── internal ────────────────────────────────────────────────────────────────
-
-migrate :: PG.Connection -> IO ()
-migrate conn = do
-  _ <-
-    PG.execute_
-      conn
-      "CREATE TABLE IF NOT EXISTS events \
-      \( seq          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY \
-      \, event_id     UUID        NOT NULL DEFAULT uuidv7() \
-      \, event_type   TEXT        NOT NULL \
-      \, payload      JSONB       NOT NULL \
-      \, payload_type TEXT GENERATED ALWAYS AS (payload ->> 'type') VIRTUAL \
-      \, recorded_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp() \
-      \, CONSTRAINT events_type_matches_payload \
-      \    CHECK (payload_type IS NULL OR payload_type = event_type) \
-      \)"
-  _ <-
-    PG.execute_
-      conn
-      "CREATE UNIQUE INDEX IF NOT EXISTS events_event_id_key ON events (event_id)"
-  _ <-
-    PG.execute_
-      conn
-      "CREATE INDEX IF NOT EXISTS events_event_type_seq_idx ON events (event_type, seq)"
-  _ <-
-    PG.execute_
-      conn
-      "CREATE INDEX IF NOT EXISTS events_recorded_at_idx ON events (recorded_at)"
-  _ <-
-    PG.execute_
-      conn
-      "CREATE TABLE IF NOT EXISTS stream_version \
-      \( id      INT    PRIMARY KEY \
-      \, version BIGINT NOT NULL DEFAULT 0 \
-      \, CONSTRAINT stream_version_singleton CHECK (id = 1) \
-      \)"
-  -- バージョンを既存イベント数で初期化（既に行がある場合は何もしない）
-  _ <-
-    PG.execute_
-      conn
-      "INSERT INTO stream_version (id, version) \
-      \SELECT 1, COUNT(*) FROM events \
-      \ON CONFLICT (id) DO NOTHING"
-  pure ()
-
-mkPgStore :: PG.Connection -> EventStore
-mkPgStore conn =
+mkTenantStore :: PG.Connection -> TenantId -> EventStore
+mkTenantStore conn tid =
   EventStore
-    { esLoad = safeIO (loadFromPg conn)
-    , esAppend = appendToPg conn
+    { esLoad = safeIO (loadFromPg conn tid)
+    , esAppend = appendToPg conn tid
     }
 
-loadFromPg :: PG.Connection -> IO (StreamVersion, [Event])
-loadFromPg conn = do
-  [PG.Only ver] <-
-    PG.query_ conn "SELECT version FROM stream_version WHERE id = 1" :: IO [PG.Only Int64]
+-- | Tenant streamとIdentity streamをマージしてseq順に読む。
+loadFromPg :: PG.Connection -> TenantId -> IO (StreamVersion, [Event])
+loadFromPg conn tid = do
+  tenantVer <-
+    queryOneVersion
+      conn
+      "SELECT version FROM stream_version WHERE tenant_id = ?"
+      (PG.Only (unTenantId tid))
+  identityVer <- queryOneVersion conn "SELECT version FROM identity_stream_version WHERE id = 1" ()
   rows <-
-    PG.query_ conn "SELECT payload::text FROM events ORDER BY seq ASC" :: IO [PG.Only Text]
+    PG.query
+      conn
+      "SELECT payload::text FROM events WHERE tenant_id = ? OR tenant_id IS NULL ORDER BY seq ASC"
+      (PG.Only (unTenantId tid)) ::
+      IO [PG.Only Text]
   events <- mapM decodeRow rows
-  pure (StreamVersion ver, events)
+  pure (StreamVersion tenantVer identityVer, events)
  where
   decodeRow (PG.Only txt) =
     case Aeson.eitherDecodeStrict (BS8.pack (T.unpack txt)) of
       Left err -> fail ("event decode failed: " <> err)
       Right ev -> pure ev
 
--- | バージョンが一致する場合のみ追記し、version カウンタを進める。
-appendToPg :: PG.Connection -> StreamVersion -> [Event] -> IO (Either AppError ())
-appendToPg conn (StreamVersion expected) evts = do
+queryOneVersion :: (PG.ToRow q) => PG.Connection -> PG.Query -> q -> IO Int64
+queryOneVersion conn q params = do
+  rows <- PG.query conn q params :: IO [PG.Only Int64]
+  pure $ case rows of
+    [PG.Only v] -> v
+    _ -> 0 -- 行が無ければまだ何も追記されていない（Tenant未初期化等）。
+
+{- | 与えられたイベント群が実際に触れるストリームだけバージョン確認・追記する
+(doc/tenant_isolation.md §6.2 の「触れていないサブストリームの楽観ロックは
+検査しない」という簡略化)。1コマンドの decide が生成するイベントは現状すべて
+同種（Identity か Tenant のいずれか一方のみ）だが、将来の混在にも対応できる
+よう両方を1トランザクションで処理する。
+-}
+appendToPg :: PG.Connection -> TenantId -> StreamVersion -> [Event] -> IO (Either AppError ())
+appendToPg conn tid (StreamVersion expectedTenant expectedIdentity) evts = do
   result <- try @SomeException $ PG.withTransaction conn $ do
-    -- FOR UPDATE でバージョン行を行ロック → 同時書き込みを直列化
-    [PG.Only current] <-
-      PG.query_ conn "SELECT version FROM stream_version WHERE id = 1 FOR UPDATE" ::
-        IO [PG.Only Int64]
-    if current /= expected
+    tenantCurrent <-
+      if null tenantEvts then pure expectedTenant else lockTenantVersion conn tid
+    identityCurrent <-
+      if null identityEvts then pure expectedIdentity else lockIdentityVersion conn
+    if tenantCurrent /= expectedTenant || identityCurrent /= expectedIdentity
       then pure (Left AppConcurrencyConflict)
       else do
-        mapM_ insertOne evts
-        _ <-
-          PG.execute
-            conn
-            "UPDATE stream_version SET version = version + ? WHERE id = 1"
-            (PG.Only (fromIntegral (length evts) :: Int64))
+        unless (null tenantEvts) $ do
+          syncTenantRegistry conn tenantEvts
+          mapM_ (insertEvent conn (Just tid)) tenantEvts
+          advanceTenantVersion conn tid (length tenantEvts)
+        unless (null identityEvts) $ do
+          mapM_ (insertEvent conn Nothing) identityEvts
+          advanceIdentityVersion conn (length identityEvts)
         pure (Right ())
   pure $ case result of
     Left ex -> Left (AppStorageError (T.pack (show ex)))
     Right x -> x
  where
-  insertOne ev =
-    let payload = T.pack (BS8.unpack (LBS.toStrict (Aeson.encode ev)))
-        typ = eventType ev
-    in PG.execute
-         conn
-         "INSERT INTO events (event_type, payload) VALUES (?, ?::jsonb)"
-         (typ :: Text, payload :: Text)
+  tenantEvts = filter (not . isIdentityEvent) evts
+  identityEvts = filter isIdentityEvent evts
+
+-- | stream_version行が無ければ0で作成してからFOR UPDATEで行ロックする。
+lockTenantVersion :: PG.Connection -> TenantId -> IO Int64
+lockTenantVersion conn tid = do
+  _ <-
+    PG.execute
+      conn
+      "INSERT INTO stream_version (tenant_id, version) VALUES (?, 0) ON CONFLICT (tenant_id) DO NOTHING"
+      (PG.Only (unTenantId tid))
+  [PG.Only v] <-
+    PG.query
+      conn
+      "SELECT version FROM stream_version WHERE tenant_id = ? FOR UPDATE"
+      (PG.Only (unTenantId tid)) ::
+      IO [PG.Only Int64]
+  pure v
+
+lockIdentityVersion :: PG.Connection -> IO Int64
+lockIdentityVersion conn = do
+  [PG.Only v] <-
+    PG.query_ conn "SELECT version FROM identity_stream_version WHERE id = 1 FOR UPDATE" ::
+      IO [PG.Only Int64]
+  pure v
+
+advanceTenantVersion :: PG.Connection -> TenantId -> Int -> IO ()
+advanceTenantVersion conn tid n =
+  void $
+    PG.execute
+      conn
+      "UPDATE stream_version SET version = version + ? WHERE tenant_id = ?"
+      (fromIntegral n :: Int64, unTenantId tid)
+
+advanceIdentityVersion :: PG.Connection -> Int -> IO ()
+advanceIdentityVersion conn n =
+  void $
+    PG.execute
+      conn
+      "UPDATE identity_stream_version SET version = version + ? WHERE id = 1"
+      (PG.Only (fromIntegral n :: Int64))
+
+{- | TenantCreated/TenantSuspended/TenantArchived を `tenants` レジストリ
+テーブルにも反映する。`events` への追記と同一トランザクションで行うため、
+events.tenant_id の外部キー制約は TenantCreated の時点で必ず満たされる
+(doc/tenant_isolation.md §6.1)。
+-}
+syncTenantRegistry :: PG.Connection -> [Event] -> IO ()
+syncTenantRegistry conn = mapM_ syncOne
+ where
+  syncOne (TenantCreated t) =
+    void $
+      PG.execute
+        conn
+        "INSERT INTO tenants (tenant_id, name, status, kind, kind_detail) \
+        \VALUES (?, ?, ?, ?, ?::jsonb) ON CONFLICT (tenant_id) DO NOTHING"
+        ( unTenantId (tenantId t)
+        , tenantName t
+        , statusText (tenantStatus t)
+        , kindText (tenantKind t)
+        , kindDetailJson (tenantKind t)
+        )
+  syncOne (TenantSuspended tid') =
+    void $
+      PG.execute
+        conn
+        "UPDATE tenants SET status = ? WHERE tenant_id = ?"
+        (statusText TenantStatusSuspended, unTenantId tid')
+  syncOne (TenantArchived tid') =
+    void $
+      PG.execute
+        conn
+        "UPDATE tenants SET status = ? WHERE tenant_id = ?"
+        (statusText TenantStatusArchived, unTenantId tid')
+  syncOne _ = pure ()
+
+statusText :: TenantStatus -> Text
+statusText TenantStatusActive = "active"
+statusText TenantStatusSuspended = "suspended"
+statusText TenantStatusArchived = "archived"
+
+kindText :: TenantKind -> Text
+kindText StandaloneTenant = "standalone"
+kindText (ConsolidationTenant _) = "consolidation"
+
+kindDetailJson :: TenantKind -> Maybe Text
+kindDetailJson StandaloneTenant = Nothing
+kindDetailJson k@(ConsolidationTenant _) =
+  Just (T.pack (BS8.unpack (LBS.toStrict (Aeson.encode k))))
+
+insertEvent :: PG.Connection -> Maybe TenantId -> Event -> IO ()
+insertEvent conn mTid ev =
+  void $
+    PG.execute
+      conn
+      "INSERT INTO events (event_type, payload, tenant_id) VALUES (?, ?::jsonb, ?)"
+      (eventType ev, payloadText ev, fmap unTenantId mTid)
+ where
+  payloadText e = T.pack (BS8.unpack (LBS.toStrict (Aeson.encode e)))
 
 eventType :: Event -> Text
 eventType ev = case Aeson.toJSON ev of
@@ -219,3 +298,106 @@ safeIO action = do
   pure $ case result of
     Left ex -> Left (AppStorageError (T.pack (show ex)))
     Right v -> Right v
+
+{- | infra/vm-db/schema.sql と同じDDL。`owl_migrator`（テーブル所有者）として
+実行することを前提とする — `owl_app` で実行すると ALTER TABLE 等が権限不足で
+失敗する（doc/tenant_isolation.md §6.4 の意図通り）。本番運用では
+schema.sql を直接 psql で適用する運用とし、この関数は開発時の補助に使う。
+2つを同期させること。
+-}
+runMigration :: PG.Connection -> IO ()
+runMigration conn = do
+  _ <-
+    PG.execute_
+      conn
+      "CREATE TABLE IF NOT EXISTS tenants \
+      \( tenant_id   UUID        PRIMARY KEY \
+      \, name        TEXT        NOT NULL \
+      \, status      TEXT        NOT NULL DEFAULT 'active' \
+      \              CHECK (status IN ('active', 'suspended', 'archived')) \
+      \, kind        TEXT        NOT NULL DEFAULT 'standalone' \
+      \              CHECK (kind IN ('standalone', 'consolidation')) \
+      \, kind_detail JSONB \
+      \, created_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp() \
+      \)"
+  _ <-
+    PG.execute_
+      conn
+      "CREATE TABLE IF NOT EXISTS events \
+      \( seq          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY \
+      \, event_id     UUID        NOT NULL DEFAULT uuidv7() \
+      \, event_type   TEXT        NOT NULL \
+      \, payload      JSONB       NOT NULL \
+      \, payload_type TEXT GENERATED ALWAYS AS (payload ->> 'type') VIRTUAL \
+      \, tenant_id    UUID        REFERENCES tenants (tenant_id) \
+      \, recorded_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp() \
+      \, CONSTRAINT events_type_matches_payload \
+      \    CHECK (payload_type IS NULL OR payload_type = event_type) \
+      \)"
+  -- 既存DBからのアップグレード用（フレッシュインストールでは無害な no-op）。
+  _ <-
+    PG.execute_
+      conn
+      "ALTER TABLE events ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants (tenant_id)"
+  _ <-
+    PG.execute_
+      conn
+      "CREATE UNIQUE INDEX IF NOT EXISTS events_event_id_key ON events (event_id)"
+  _ <- PG.execute_ conn "DROP INDEX IF EXISTS events_event_type_seq_idx"
+  _ <-
+    PG.execute_
+      conn
+      "CREATE INDEX IF NOT EXISTS events_tenant_type_seq_idx ON events (tenant_id, event_type, seq)"
+  _ <-
+    PG.execute_
+      conn
+      "CREATE INDEX IF NOT EXISTS events_recorded_at_idx ON events (recorded_at)"
+  _ <-
+    PG.execute_
+      conn
+      "CREATE TABLE IF NOT EXISTS stream_version \
+      \( tenant_id UUID   PRIMARY KEY REFERENCES tenants (tenant_id) \
+      \, version   BIGINT NOT NULL DEFAULT 0 \
+      \)"
+  _ <-
+    PG.execute_
+      conn
+      "CREATE TABLE IF NOT EXISTS identity_stream_version \
+      \( id      INT    PRIMARY KEY CHECK (id = 1) \
+      \, version BIGINT NOT NULL DEFAULT 0 \
+      \)"
+  _ <-
+    PG.execute_
+      conn
+      "INSERT INTO identity_stream_version (id, version) VALUES (1, 0) ON CONFLICT DO NOTHING"
+  -- RLS（doc/tenant_isolation.md §6.3）。fail-closed: app.tenant_id 未設定時は0件。
+  _ <- PG.execute_ conn "ALTER TABLE events ENABLE ROW LEVEL SECURITY"
+  _ <- PG.execute_ conn "ALTER TABLE events FORCE ROW LEVEL SECURITY"
+  _ <- PG.execute_ conn "DROP POLICY IF EXISTS events_tenant_select ON events"
+  _ <-
+    PG.execute_
+      conn
+      "CREATE POLICY events_tenant_select ON events USING ( \
+      \  tenant_id IS NULL \
+      \  OR tenant_id = current_setting('app.tenant_id', true)::uuid \
+      \)"
+  _ <- PG.execute_ conn "DROP POLICY IF EXISTS events_tenant_insert ON events"
+  _ <-
+    PG.execute_
+      conn
+      "CREATE POLICY events_tenant_insert ON events FOR INSERT WITH CHECK ( \
+      \  tenant_id IS NULL \
+      \  OR tenant_id = current_setting('app.tenant_id', true)::uuid \
+      \)"
+  _ <- PG.execute_ conn "ALTER TABLE stream_version ENABLE ROW LEVEL SECURITY"
+  _ <- PG.execute_ conn "ALTER TABLE stream_version FORCE ROW LEVEL SECURITY"
+  _ <- PG.execute_ conn "DROP POLICY IF EXISTS stream_version_tenant ON stream_version"
+  _ <-
+    PG.execute_
+      conn
+      "CREATE POLICY stream_version_tenant ON stream_version USING ( \
+      \  tenant_id = current_setting('app.tenant_id', true)::uuid \
+      \) WITH CHECK ( \
+      \  tenant_id = current_setting('app.tenant_id', true)::uuid \
+      \)"
+  pure ()

@@ -48,6 +48,7 @@ import Core.Domain.Partner (Partner, PartnerId)
 import Core.Domain.Reconciliation (Reconciliation, ReconciliationId)
 import Core.Domain.SubAccount (SubAccount, SubAccountId)
 import Core.Domain.Tax (TaxEntry, TaxEntryId)
+import Core.Domain.Tenant (Tenant)
 import Core.Domain.User (OsUid, User, UserId, firstOsUid)
 
 newtype JournalBook = JournalBook
@@ -167,7 +168,11 @@ initialUserBook :: UserBook
 initialUserBook = UserBook Map.empty firstOsUid Map.empty
 
 data AppBook = AppBook
-  { appJournals :: JournalBook
+  { appTenant :: Maybe Tenant
+  {- ^ このAppBookが属するTenant。`TenantCreated` 以前は Nothing
+  (doc/tenant_isolation.md §4: TenantCreated はストリームの先頭イベント)。
+  -}
+  , appJournals :: JournalBook
   , appMasters :: MasterBook
   , appCash :: CashBook
   , appPeriods :: PeriodsBook
@@ -184,6 +189,7 @@ data AppBook = AppBook
 initialAppBook :: AppBook
 initialAppBook =
   AppBook
+    Nothing
     initialJournalBook
     initialMasterBook
     initialCashBook

@@ -21,6 +21,7 @@ import Core.Domain.Partner (Partner (..))
 import Core.Domain.Reconciliation (Reconciliation (..), ReconciliationItem (..))
 import Core.Domain.SubAccount (SubAccount (..))
 import Core.Domain.Tax (TaxEntry (..))
+import Core.Domain.Tenant (Tenant (..), TenantId, TenantStatus (..))
 import Core.Domain.User (OsUid (..), User (..), UserId, UserStatus (..))
 import Core.Event (Event (..))
 import Core.State
@@ -211,9 +212,16 @@ evolve book (TaxEntryRecorded t) =
     { appTax =
         TaxBook (Map.insert (teId t) t (taxEntries (appTax book)))
     }
+-- ── テナント管理 (doc/tenant_isolation.md §4) ────────────────────────────────
+
+evolve book (TenantCreated tenant) = book{appTenant = Just tenant}
+evolve book (TenantSuspended tid) =
+  book{appTenant = adjustTenant tid (\t -> t{tenantStatus = TenantStatusSuspended}) (appTenant book)}
+evolve book (TenantArchived tid) =
+  book{appTenant = adjustTenant tid (\t -> t{tenantStatus = TenantStatusArchived}) (appTenant book)}
 -- ── ユーザー管理 (.claude/user.md §2) ───────────────────────────────────────
 
-evolve book (UserCreated uid uidOs name role scopes) =
+evolve book (UserCreated uid uidOs name homeTenant role scopes) =
   updateUsers book $ \ub ->
     ub
       { users =
@@ -223,7 +231,8 @@ evolve book (UserCreated uid uidOs name role scopes) =
               { userId = uid
               , userOsUid = uidOs
               , userDisplayName = name
-              , userRole = role
+              , userHomeTenant = homeTenant
+              , userTenantRoles = Map.singleton homeTenant role
               , userStatus = Pending
               , userScreenScopes = scopes
               , userPasswordHash = Nothing
@@ -232,15 +241,26 @@ evolve book (UserCreated uid uidOs name role scopes) =
             (users ub)
       , ubNextUid = OsUid (unOsUid uidOs + 1)
       }
+-- \| ホームテナントのロールを変更する (Stage 1 の簡略化、doc/tenant_isolation.md §5.2 参照)。
 evolve book (UserRoleChanged uid role) =
   updateUsers book $ \ub ->
     ub
-      { users = Map.adjust (\u -> u{userRole = role}) uid (users ub)
+      { users =
+          Map.adjust
+            (\u -> u{userTenantRoles = Map.insert (userHomeTenant u) role (userTenantRoles u)})
+            uid
+            (users ub)
       , ubPendingEscalations = Map.delete uid (ubPendingEscalations ub)
       }
 evolve book (UserRoleEscalationProposed proposer target) =
   updateUsers book $ \ub ->
     ub{ubPendingEscalations = Map.insert target proposer (ubPendingEscalations ub)}
+evolve book (UserTenantAccessGranted uid tid role) =
+  updateUser book uid $ \u ->
+    u{userTenantRoles = Map.insert tid role (userTenantRoles u)}
+evolve book (UserTenantAccessRevoked uid tid) =
+  updateUser book uid $ \u ->
+    u{userTenantRoles = Map.delete tid (userTenantRoles u)}
 evolve book (UserScopeGranted uid scope) =
   updateUser book uid $ \u ->
     u{userScreenScopes = scope : userScreenScopes u}
@@ -288,6 +308,12 @@ updateAssets book f =
 updateAsset :: AppBook -> FixedAssetId -> ComponentId -> (FixedAsset -> FixedAsset) -> AppBook
 updateAsset book assetId compId f =
   updateAssets book (Map.adjust f (assetId, compId))
+
+{- | 対象TenantIdが一致する場合のみ更新する。decide が整合性を保証しているため
+不一致時はそのまま返す。
+-}
+adjustTenant :: TenantId -> (Tenant -> Tenant) -> Maybe Tenant -> Maybe Tenant
+adjustTenant tid f = fmap (\t -> if tenantId t == tid then f t else t)
 
 updateUsers :: AppBook -> (UserBook -> UserBook) -> AppBook
 updateUsers book f = book{appUsers = f (appUsers book)}

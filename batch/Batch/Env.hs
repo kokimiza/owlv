@@ -9,9 +9,10 @@ module Batch.Env
 import Effectful
 import Effectful.Error.Static
 
+import Core.Domain.Tenant (defaultTenantId)
 import Shell.AppError (AppError (..))
 import Shell.Effects (AuditLogEff, ClockEff, EventStoreEff, UserCtxEff)
-import Shell.EventStore (EventStore, newPostgresEventStore)
+import Shell.EventStore (EventStore, connectDb, forTenant)
 import Shell.Interpreters.AuditLog (runAuditLogNoOp)
 import Shell.Interpreters.Clock (runClockReal)
 import Shell.Interpreters.EventStore (runEventStorePg)
@@ -33,8 +34,16 @@ type BatchEffs =
    , IOE
    ]
 
+{- | Stage 2（doc/tenant_isolation.md §6.6）: 現状は defaultTenantId 1本に
+固定。複数Tenantを処理対象にする場合は Tenant一覧を読み、各Tenantごとに
+forTenant したハンドルでループする形に拡張する（未実装）。
+-}
 loadBatchEnv :: IO (Either AppError BatchEnv)
-loadBatchEnv = fmap (fmap BatchEnv) newPostgresEventStore
+loadBatchEnv = do
+  connResult <- connectDb
+  case connResult of
+    Left err -> pure (Left err)
+    Right conn -> fmap BatchEnv <$> forTenant conn defaultTenantId
 
 {- | 本番インタープリタスタックでバッチジョブを走らせる。
 UserCtx は "batch" 固定。PG バッチロール整備後は runUserCtxPg に切替。

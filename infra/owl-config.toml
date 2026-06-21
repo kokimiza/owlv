@@ -55,6 +55,9 @@ ssh_port       = 8022
 db_name        = "owl"
 db_app_user    = "owl_app"
 db_repl_user   = "owl_repl"
+# doc/tenant_isolation.md §6.4: owl_app をテーブル所有者にしないためのロール分離。
+db_migrator_user       = "owl_migrator"
+db_platform_admin_user = "owl_platform_admin"
 pg_version     = "18"
 
 [user]

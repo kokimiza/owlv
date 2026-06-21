@@ -14,13 +14,18 @@ module Core.Domain.User
   , firstOsUid
   , User (..)
   , isActiveAdmin
+  , roleInTenant
   ) where
 
 import Data.Aeson (FromJSON (..), ToJSON (..))
+import Data.Map.Strict (Map)
 import Data.Text (Text)
 import GHC.Generics (Generic)
 
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+
+import Core.Domain.Tenant (TenantId)
 
 -- | OS ユーザー名そのもの。一度発行したら不変（.claude/user.md §2.1）。
 newtype UserId = UserId {unUserId :: Text}
@@ -104,11 +109,17 @@ instance FromJSON OsUid where
 firstOsUid :: OsUid
 firstOsUid = OsUid 2000
 
+{- | userHomeTenant/userTenantRoles (doc/tenant_isolation.md §5.2):
+OS実体に1:1対応する User はTenantをまたいで共有されうるため、`Role` は
+User全体ではなく (User, Tenant) の組に持たせる。`userTenantRoles` は
+常に `userHomeTenant` をキーとして含む（`decide` で不変条件として強制）。
+-}
 data User = User
   { userId :: UserId
   , userOsUid :: OsUid
   , userDisplayName :: Text
-  , userRole :: Role
+  , userHomeTenant :: TenantId
+  , userTenantRoles :: Map TenantId Role
   , userStatus :: UserStatus
   , userScreenScopes :: [Text] -- 画面アクセス制限（Core.Domain.OrgPermission.PermScope の ScreenScope 相当）
   , userPasswordHash :: Maybe Text -- Argon2id ハッシュ。SSH 認証には使わない (§2.3)
@@ -119,5 +130,15 @@ data User = User
 instance ToJSON User
 instance FromJSON User
 
+-- | 指定Tenantにおけるロール。グラントがなければ Nothing。
+roleInTenant :: TenantId -> User -> Maybe Role
+roleInTenant tid u = Map.lookup tid (userTenantRoles u)
+
+{- | ホームテナントで Admin かつ Active であることを判定する（Stage 1 の簡略化:
+物理的なTenantストリーム分離前は「ホームテナントの管理者か」で代替する。
+doc/tenant_isolation.md §5.2 の本来の意味（操作対象Tenantでの権限判定）は
+forTenant導入後、現在のTenantIdを明示的に渡す形に置き換える）。
+-}
 isActiveAdmin :: User -> Bool
-isActiveAdmin u = userRole u == Admin && userStatus u == Active
+isActiveAdmin u =
+  userStatus u == Active && roleInTenant (userHomeTenant u) u == Just Admin

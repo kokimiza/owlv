@@ -23,6 +23,11 @@ PG_VERSION="${PG_VERSION:-18}"
 DB_NAME="${DB_NAME:-owl}"
 DB_APP_USER="${DB_APP_USER:-owl_app}"
 DB_REPL_USER="${DB_REPL_USER:-owl_repl}"
+# doc/tenant_isolation.md §6.4: owl_app はテーブル所有者にしない（RLSは所有者には
+# 適用されないため）。DDL とテーブル所有は owl_migrator、Tenantレジストリの全件参照は
+# owl_platform_admin（root_admin_username 経由のブートストラップ管理者専用）に分離する。
+DB_MIGRATOR_USER="${DB_MIGRATOR_USER:-owl_migrator}"
+DB_PLATFORM_ADMIN_USER="${DB_PLATFORM_ADMIN_USER:-owl_platform_admin}"
 
 _log "DB VM セットアップ開始 (${OWL_DB_IP})"
 
@@ -141,7 +146,7 @@ sleep 2
 _log "DB ユーザー・データベース作成"
 
 su -m _postgresql -c "psql -c \"\
-    CREATE USER ${DB_APP_USER} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE \
+    CREATE USER ${DB_APP_USER} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS \
         ENCRYPTED PASSWORD 'changeme_app_password';\"" 2>/dev/null ||
 	_info "${DB_APP_USER} は既に存在します"
 
@@ -150,7 +155,19 @@ su -m _postgresql -c "psql -c \"\
         ENCRYPTED PASSWORD 'changeme_repl_password';\"" 2>/dev/null ||
 	_info "${DB_REPL_USER} は既に存在します"
 
-su -m _postgresql -c "createdb -O ${DB_APP_USER} ${DB_NAME} 2>/dev/null" ||
+# テーブル所有者・DDL実行専用。owl_app には所有権を渡さない (doc/tenant_isolation.md §6.4)。
+su -m _postgresql -c "psql -c \"\
+    CREATE USER ${DB_MIGRATOR_USER} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS \
+        ENCRYPTED PASSWORD 'changeme_migrator_password';\"" 2>/dev/null ||
+	_info "${DB_MIGRATOR_USER} は既に存在します"
+
+# root_admin_username のブートストラップ専用。tenants テーブルの全件参照のみ許可する。
+su -m _postgresql -c "psql -c \"\
+    CREATE USER ${DB_PLATFORM_ADMIN_USER} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS \
+        ENCRYPTED PASSWORD 'changeme_platform_admin_password';\"" 2>/dev/null ||
+	_info "${DB_PLATFORM_ADMIN_USER} は既に存在します"
+
+su -m _postgresql -c "createdb -O ${DB_MIGRATOR_USER} ${DB_NAME} 2>/dev/null" ||
 	_info "${DB_NAME} は既に存在します"
 
 # RLS を有効化
@@ -166,6 +183,9 @@ echo "   1. PostgreSQL の初期パスワードを変更:"
 echo "      psql -U postgres -c \"ALTER USER postgres PASSWORD '<strong-pass>';\""
 echo "      psql -U postgres -c \"ALTER USER ${DB_APP_USER} PASSWORD '<strong-pass>';\""
 echo "      psql -U postgres -c \"ALTER USER ${DB_REPL_USER} PASSWORD '<strong-pass>';\""
+echo "      psql -U postgres -c \"ALTER USER ${DB_MIGRATOR_USER} PASSWORD '<strong-pass>';\""
+echo "      psql -U postgres -c \"ALTER USER ${DB_PLATFORM_ADMIN_USER} PASSWORD '<strong-pass>';\""
 echo "   2. 本番 TLS 証明書に差し替え: ${PGDATA}/server.{key,crt}"
-echo "   3. owlv スキーマ・RLS ポリシーを適用:"
-echo "      psql -U ${DB_APP_USER} ${DB_NAME} -f /provision/vm-db/schema.sql"
+echo "   3. owlv スキーマ・RLS ポリシーを適用（owl_app ではなく owl_migrator で実行すること。"
+echo "      所有者でないと RLS が機能しない — doc/tenant_isolation.md §6.4）:"
+echo "      psql -U ${DB_MIGRATOR_USER} ${DB_NAME} -f /provision/vm-db/schema.sql"

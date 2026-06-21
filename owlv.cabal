@@ -46,6 +46,7 @@ library
         Core.Domain.Materiality
         Core.Domain.EmployeeBenefit
         Core.Domain.Tax
+        Core.Domain.Tenant
         Core.Domain.User
         Core.Error
         Core.Command
@@ -56,6 +57,7 @@ library
         Shell.AppError
         Shell.ErrorCatalog
         Shell.EventStore
+        Shell.EventClassification
         Shell.Effects
         Shell.Interpreters.EventStore
         Shell.Interpreters.Clock

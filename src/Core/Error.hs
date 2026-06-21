@@ -16,6 +16,7 @@ import Core.Domain.Money (Money)
 import Core.Domain.OrgPermission (PermScope)
 import Core.Domain.Organisation (OrganisationId)
 import Core.Domain.Reconciliation (ReconciliationId)
+import Core.Domain.Tenant (TenantId)
 import Core.Domain.User (UserId)
 
 data DomainError
@@ -103,6 +104,18 @@ data DomainError
     DuplicateJudgmentLog JudgmentLogId
   | -- | 判断ログの必須フィールドが空
     JudgmentLogEmptyField Text
+  | {- | テナント管理エラー (doc/tenant_isolation.md §4) ───────────────────
+    | このストリームには既に Tenant が初期化済み（CreateTenant の二重発行）
+    -}
+    TenantAlreadyInitialized
+  | -- | このストリームにまだ Tenant が存在しない（CreateTenant 未発行）
+    TenantNotInitialized
+  | -- | 操作対象のTenantIdがこのストリームのTenantと一致しない
+    TenantIdMismatch TenantId TenantId -- 期待（このストリームのTenant）, 指定
+  | -- | 既に停止済みのTenantへの停止操作
+    TenantAlreadySuspended TenantId
+  | -- | 既に廃止済みのTenantへの操作
+    TenantAlreadyArchived TenantId
   | {- | ユーザー管理エラー (.claude/user.md §2) ─────────────────────────
     | ユーザー名が POSIX 制約を満たさない
     -}
@@ -133,4 +146,10 @@ data DomainError
     UserScopeAlreadyGranted UserId Text
   | -- | 存在しないスコープを剥奪しようとした
     UserScopeNotFound UserId Text
+  | -- | 既に当該Tenantへのアクセスを持つユーザーへの重複付与 (doc/tenant_isolation.md §5.2)
+    UserTenantAccessAlreadyGranted UserId TenantId
+  | -- | 付与されていないTenantへのアクセス剥奪・ロール変更
+    UserTenantAccessNotFound UserId TenantId
+  | -- | ホームテナントへのアクセスは剥奪不可
+    CannotRevokeHomeTenantAccess UserId TenantId
   deriving (Eq, Show)

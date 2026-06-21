@@ -21,7 +21,7 @@ import Core.Domain.User (Role, UserId)
 import Core.State (initialMasterBook)
 import Shell.CommandExecutor (loadMasterBook)
 import Shell.ErrorCatalog (defaultCatalog)
-import Shell.EventStore (pgStore)
+import Shell.EventStore (EventStore)
 import Shell.TUI.Attrs (hintAttr, owlvAttrMap, titleAttr)
 import Shell.TUI.Screen.Journal (drawJournalForm, handleFormEv)
 import Shell.TUI.Screen.Master.AccountCode
@@ -70,11 +70,10 @@ import Shell.TUI.Types
 
 -- ── Entry point ──────────────────────────────────────────────────────────────
 
-runTUI :: PG.Connection -> UserId -> Role -> IO ()
-runTUI conn currentUser currentRole = do
+runTUI :: PG.Connection -> EventStore -> UserId -> Role -> IO ()
+runTUI conn store currentUser currentRole = do
   chan <- newBChan 16
-  let store = pgStore conn
-      initState =
+  let initState =
         AppState
           { appScreen = ScreenLoading
           , appStore = store

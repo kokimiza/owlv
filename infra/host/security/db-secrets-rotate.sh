@@ -47,6 +47,8 @@ AP_IP=$(_toml "network.internal_lan" "ap_vm")
 DB_NAME=$(_toml "app" "db_name")
 DB_APP_USER=$(_toml "app" "db_app_user")
 DB_REPL_USER=$(_toml "app" "db_repl_user")
+DB_MIGRATOR_USER=$(_toml "app" "db_migrator_user")
+DB_PLATFORM_ADMIN_USER=$(_toml "app" "db_platform_admin_user")
 
 [ -n "$DB_IP" ] && [ -n "$AP_IP" ] || _die "owl-config.toml [network.internal_lan] が不完全です"
 
@@ -70,6 +72,8 @@ _scp_to_ap() {
 PG_PASS=$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-28)
 APP_PASS=$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-28)
 REPL_PASS=$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-28)
+MIGRATOR_PASS=$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-28)
+PLATFORM_ADMIN_PASS=$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-28)
 
 _log "DB VM (${DB_IP}) のパスワードをローテーションします"
 
@@ -79,16 +83,23 @@ _ssh_db "su -m _postgresql -c \"psql -c \\\"ALTER USER ${DB_APP_USER} PASSWORD '
 	_die "${DB_APP_USER} のパスワード変更に失敗しました"
 _ssh_db "su -m _postgresql -c \"psql -c \\\"ALTER USER ${DB_REPL_USER} PASSWORD '${REPL_PASS}';\\\"\"" ||
 	_die "${DB_REPL_USER} のパスワード変更に失敗しました"
-_ok "postgres / ${DB_APP_USER} / ${DB_REPL_USER} のパスワードをローテーション"
+_ssh_db "su -m _postgresql -c \"psql -c \\\"ALTER USER ${DB_MIGRATOR_USER} PASSWORD '${MIGRATOR_PASS}';\\\"\"" ||
+	_die "${DB_MIGRATOR_USER} のパスワード変更に失敗しました"
+_ssh_db "su -m _postgresql -c \"psql -c \\\"ALTER USER ${DB_PLATFORM_ADMIN_USER} PASSWORD '${PLATFORM_ADMIN_PASS}';\\\"\"" ||
+	_die "${DB_PLATFORM_ADMIN_USER} のパスワード変更に失敗しました"
+_ok "postgres / ${DB_APP_USER} / ${DB_REPL_USER} / ${DB_MIGRATOR_USER} / ${DB_PLATFORM_ADMIN_USER} のパスワードをローテーション"
 
-# owlv スキーマ適用 (存在する場合のみ)
+# owlv スキーマ適用 (存在する場合のみ)。doc/tenant_isolation.md §6.4: owl_app は
+# テーブル所有者ではないため、スキーマ適用は owl_migrator として実行する必要がある
+# （owl_app で実行すると CREATE POLICY 等が権限不足で失敗する）。
 if [ -f "${INFRA_ROOT}/vm-db/schema.sql" ]; then
-	_log "owlv スキーマを適用..."
+	_log "owlv スキーマを適用 (owl_migrator)..."
 	ssh -i "$BACKUP_KEY" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" \
 		"root@${DB_IP}" "install -d /tmp/owl-schema"
 	scp -i "$BACKUP_KEY" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" \
 		"${INFRA_ROOT}/vm-db/schema.sql" "root@${DB_IP}:/tmp/owl-schema/schema.sql"
-	_ssh_db "su -m _postgresql -c \"psql ${DB_NAME} -f /tmp/owl-schema/schema.sql\"" ||
+	# -h を付けない = Unixドメインソケット経由（pg_hba.conf の local 行にマッチさせる）。
+	_ssh_db "PGPASSWORD='${MIGRATOR_PASS}' psql -U ${DB_MIGRATOR_USER} ${DB_NAME} -f /tmp/owl-schema/schema.sql" ||
 		_die "スキーマ適用に失敗しました"
 	_ssh_db "rm -rf /tmp/owl-schema"
 	_ok "owlv スキーマ適用"
@@ -126,6 +137,8 @@ echo "新パスワード (このターミナルにのみ表示。記録は各自
 echo "  postgres   : ${PG_PASS}"
 echo "  ${DB_APP_USER}    : ${APP_PASS}"
 echo "  ${DB_REPL_USER}   : ${REPL_PASS}"
+echo "  ${DB_MIGRATOR_USER} : ${MIGRATOR_PASS}"
+echo "  ${DB_PLATFORM_ADMIN_USER} : ${PLATFORM_ADMIN_PASS}"
 echo ""
 echo "【まだ残っている手動作業】"
 echo "  本番 TLS 証明書への差し替え (内部 CA 発行の証明書が必要):"

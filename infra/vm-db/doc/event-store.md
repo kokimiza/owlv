@@ -1,29 +1,55 @@
 # イベントストア テーブル定義書
 
 owlv のイベントストアは PostgreSQL 18 単一スキーマで構成する。
-本書は [Shell/EventStore.hs](../../../src/Shell/EventStore.hs) の `migrate` 関数に埋め込まれていた
-DDL を正式なテーブル定義書として切り出し、PostgreSQL 18 の機能を前提に再設計したもの。
-コード側の `migrate` はこの定義書と同期させること（定義書を更新したら `migrate` も追従する）。
+正式なDDLは [infra/vm-db/schema.sql](../schema.sql) であり、本書はその設計根拠を説明する文書に位置づけを変えた
+（旧版は [Shell/EventStore.hs](../../../src/Shell/EventStore.hs) の `migrate` 関数が真実源だったが、
+doc/tenant_isolation.md §6.4 のロール分離により `owl_app`（アプリのランタイム接続）がテーブル所有者で
+なくなったため、DDL適用は `owl_migrator` が実行する `schema.sql` に一本化した）。
+[Shell/EventStore.hs](../../../src/Shell/EventStore.hs) の `runMigration` は開発用の補助であり、`schema.sql` と同期させること。
 
 対象 DB: `owl`（[infra/vm-db/setup.sh](../setup.sh) が作成）
-適用ユーザー: `owl_app`（RLS 前提、[pg_hba.conf](../pg_hba.conf) で `hostssl` 必須）
+適用ユーザー: スキーマDDLは `owl_migrator`（テーブル所有者）。アプリの実行時接続は `owl_app`（所有者ではない、RLS前提）。
+詳細なテナント分離の設計根拠は [doc/tenant_isolation.md](../../../doc/tenant_isolation.md) を参照。
 
 ## 設計方針
 
 - **追記専用**: `events` は UPDATE / DELETE を行わない。訂正は新規イベントの追記で表現する（CLAUDE.md「イベントストアは追記専用」）。
-- **payload は JSONB**: 旧実装は `payload TEXT` に JSON 文字列を素通しで詰めていた。検索・整合性チェックを SQL 側でも行えるよう `JSONB` に変更する。
-- **IDENTITY 列**: `BIGSERIAL` は内部的に `SERIAL` 同様シーケンス権限が独立せず管理しにくいため、SQL 標準の `GENERATED ALWAYS AS IDENTITY` に置き換える（PG10+ の推奨）。
-- **UUIDv7 をイベント ID に採用**: PostgreSQL 18 で `uuidv7()` が組み込み関数として追加された（pgcrypto 等の拡張不要）。時系列ソート可能な UUID をイベント単位の外部参照キーとして持たせ、将来の複数ストリーム化・外部システム連携（DR 含む §2.2）に備える。`seq` は楽観ロック用の内部順序、`event_id` は外部に渡す不変識別子という役割分担にする。
-- **生成列で type を取り出す**: PostgreSQL 18 は `STORED` に加え `VIRTUAL` 生成列をサポートする。`event_type` を payload から都度導出する代わりにアプリ側で明示挿入する方針は変えないが、整合性検証用に `payload_type` を `VIRTUAL` 生成列として持ち、`event_type` とのズレを検出可能にする。
-- **改ざん検知用ハッシュ**: spec §7（ハッシュベースの改ざん検知）に対応し、`prev_hash` / `row_hash` を持つ。`row_hash` は `event_type || payload || recorded_at || prev_hash` から計算し、チェーン化する。
-- **複数列インデックスは skip scan 前提で設計**: PostgreSQL 18 の B-tree skip scan により、先頭列を絞らない `(event_type, seq)` のような複合インデックスでも `event_type` 単体の絞り込みが効率化される。
+- **payload は JSONB**: 検索・整合性チェックを SQL 側でも行えるよう `JSONB` で持つ。
+- **IDENTITY 列**: `BIGSERIAL` ではなく SQL 標準の `GENERATED ALWAYS AS IDENTITY` を使う（PG10+ の推奨）。
+- **UUIDv7 をイベント ID に採用**: PostgreSQL 18 の組み込み関数 `uuidv7()` を使う（pgcrypto 等の拡張不要）。時系列ソート可能な UUID をイベント単位の外部参照キーとして持たせる。`seq` は楽観ロック用の内部順序、`event_id` は外部に渡す不変識別子という役割分担。
+- **生成列で type を取り出す**: `event_type` を payload から都度導出する代わりにアプリ側で明示挿入する方針は変えないが、整合性検証用に `payload_type` を `VIRTUAL` 生成列として持ち、`event_type` とのズレを検出可能にする。
+- **`tenant_id` でテナントを分離する** (doc/tenant_isolation.md §4, §6): `events`/`stream_version` を Tenant ごとに分離する代わりに、同じテーブルに `tenant_id` 列を持たせ、PostgreSQL の Row Level Security で行レベルに絞り込む。`tenant_id IS NULL` の行は Identity stream（Userレジストリ、全社共通 — doc/tenant_isolation.md §4.1）。
+- **複数列インデックスは skip scan 前提で設計**: PostgreSQL 18 の B-tree skip scan により、先頭列を絞らない `(tenant_id, event_type, seq)` のような複合インデックスでも `event_type` 単体の絞り込みが効率化される。
 
 ## テーブル一覧
 
 | テーブル | 役割 |
 |---|---|
-| `events` | 追記専用イベントログ本体 |
-| `stream_version` | 楽観的並行性制御用のバージョンカウンタ |
+| `tenants` | Tenant レジストリ（一覧表示用。真実源は各Tenant streamの先頭イベント `TenantCreated`） |
+| `events` | 追記専用イベントログ本体。`tenant_id` でTenant stream/Identity streamを区別 |
+| `stream_version` | Tenant streamの楽観的並行性制御用バージョンカウンタ（Tenantごと） |
+| `identity_stream_version` | Identity streamの楽観的並行性制御用バージョンカウンタ（単一行） |
+
+---
+
+## `tenants`
+
+```sql
+CREATE TABLE IF NOT EXISTS tenants (
+    tenant_id   UUID        PRIMARY KEY,
+    name        TEXT        NOT NULL,
+    status      TEXT        NOT NULL DEFAULT 'active'
+                CHECK (status IN ('active', 'suspended', 'archived')),
+    kind        TEXT        NOT NULL DEFAULT 'standalone'
+                CHECK (kind IN ('standalone', 'consolidation')),
+    kind_detail JSONB,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+```
+
+`events` への直接 `SELECT` は与えない（doc/tenant_isolation.md §6.1）。`owl_app` からは見えず、`owl_platform_admin`（root_admin_username のブートストラップ専用）からのみ全件参照可能。一覧が必要な通常のTenant利用者は、自分の `userTenantRoles` に含まれる `tenant_id` だけをアプリ層（Haskell側）で名前解決する。
+
+`TenantCreated`/`TenantSuspended`/`TenantArchived` イベントの追記と同一トランザクションでこの表も更新される（[Shell/EventStore.hs](../../../src/Shell/EventStore.hs) の `syncTenantRegistry`）。
 
 ---
 
@@ -36,8 +62,7 @@ CREATE TABLE IF NOT EXISTS events (
     event_type   TEXT        NOT NULL,
     payload      JSONB       NOT NULL,
     payload_type TEXT GENERATED ALWAYS AS (payload ->> 'type') VIRTUAL,
-    prev_hash    BYTEA,
-    row_hash     BYTEA       NOT NULL,
+    tenant_id    UUID        REFERENCES tenants (tenant_id),
     recorded_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
 
     CONSTRAINT events_type_matches_payload
@@ -45,7 +70,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS events_event_id_key ON events (event_id);
-CREATE INDEX IF NOT EXISTS events_event_type_seq_idx ON events (event_type, seq);
+CREATE INDEX IF NOT EXISTS events_tenant_type_seq_idx ON events (tenant_id, event_type, seq);
 CREATE INDEX IF NOT EXISTS events_recorded_at_idx ON events (recorded_at);
 ```
 
@@ -56,41 +81,62 @@ CREATE INDEX IF NOT EXISTS events_recorded_at_idx ON events (recorded_at);
 | `event_type` | `TEXT` | NOT NULL | `Core.Event` の代数的データ型コンストラクタ名。 |
 | `payload` | `JSONB` | NOT NULL | `Aeson.encode` した `Event` 全体。 |
 | `payload_type` | `TEXT` (VIRTUAL GENERATED) | — | `payload->>'type'` を都度算出。`event_type` との不一致を CHECK で検出。 |
-| `prev_hash` | `BYTEA` | NULL 可（先頭行のみ NULL） | 直前の行の `row_hash`。チェーン検証用。 |
-| `row_hash` | `BYTEA` | NOT NULL | `sha256(event_type \|\| payload::text \|\| recorded_at \|\| coalesce(prev_hash, ''))`。アプリ側で計算して挿入する（spec §7）。 |
+| `tenant_id` | `UUID` | NULL可, FK `tenants` | NULL = Identity stream。NOT NULL = その Tenant のストリーム (doc/tenant_isolation.md §4)。**どのSQL文を実行したコードパスか（`forTenant`由来かIdentity stream由来か）だけで値が決まり、Coreのイベントペイロードの内容からは決めない**（§6.2: event_typeの名前リストに依存する設計はドリフトの懸念から不採用）。 |
 | `recorded_at` | `TIMESTAMPTZ` | NOT NULL, default `clock_timestamp()` | 記録時刻。`now()` はトランザクション開始時刻で固定されるため、追記順との対応がより厳密な `clock_timestamp()` を使う。 |
 
 ### なぜ `now()` ではなく `clock_timestamp()` か
 
 `now()`（= `transaction_timestamp()`）は同一トランザクション内で固定値になる。`appendToPg` は 1 トランザクションで複数イベントを挿入するため、`now()` のままだと同一トランザクションで追記した複数行の `recorded_at` がすべて同一になり、`seq` 順との時系列対応が失われる。`clock_timestamp()` は呼び出し都度の実時刻を返すため、行ごとに異なる値になる。
 
+### Row Level Security (doc/tenant_isolation.md §6.3)
+
+```sql
+ALTER TABLE events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE events FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY events_tenant_select ON events
+  USING (tenant_id IS NULL OR tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+CREATE POLICY events_tenant_insert ON events
+  FOR INSERT WITH CHECK (tenant_id IS NULL OR tenant_id = current_setting('app.tenant_id', true)::uuid);
+```
+
+`current_setting('app.tenant_id', true)` の第2引数 `true` は「未設定ならエラーでなく NULL を返す」指定。`tenant_id = NULL` は常に偽と評価されるため、**セッション変数を設定し忘れたコネクションは何も見えない（fail-closed）**。
+
+`FORCE ROW LEVEL SECURITY` が無いと、テーブル所有者（このDDLを実行したロール）自身にはRLSが適用されない。`owl_app` を所有者にしない（`createdb`/`schema.sql`適用は `owl_migrator` が行う）のはこれが理由 — 所有者のままだと、いくら `FORCE` を付けてもオーナー自身の接続では事実上RLSを無視できてしまう。
+
+Identity stream（`tenant_id IS NULL`）の行は、ログイン解決（OSユーザー名→Userの逆引き、doc/user.md §4.1）の都合上、Tenant単位の絞り込みを行わない。Tenant間でのUser情報の閲覧制限（「自社のテナントに関係のないUserの情報を見せない」）はアプリ層（`Shell.UserOps`/TUIへの射影）で行う、とした（doc/tenant_isolation.md §4.2 からの実装時の調整 — ログイン時点ではどのTenantの利用者かまだ確定していないため、DBのRLSだけでは表現できない）。
+
 ---
 
-## `stream_version`
+## `stream_version` / `identity_stream_version`
 
 ```sql
 CREATE TABLE IF NOT EXISTS stream_version (
-    id      INT    PRIMARY KEY,
-    version BIGINT NOT NULL DEFAULT 0,
-
-    CONSTRAINT stream_version_singleton CHECK (id = 1)
+    tenant_id UUID   PRIMARY KEY REFERENCES tenants (tenant_id),
+    version   BIGINT NOT NULL DEFAULT 0
 );
 
-INSERT INTO stream_version (id, version)
-SELECT 1, COUNT(*) FROM events
-ON CONFLICT (id) DO NOTHING;
+CREATE TABLE IF NOT EXISTS identity_stream_version (
+    id      INT    PRIMARY KEY CHECK (id = 1),
+    version BIGINT NOT NULL DEFAULT 0
+);
 ```
 
 | 列 | 型 | 制約 | 説明 |
 |---|---|---|---|
-| `id` | `INT` | PK, `CHECK (id = 1)` | シングルトン行であることを制約で明示（旧定義はコメントのみで担保していた）。 |
-| `version` | `BIGINT` | NOT NULL, default 0 | 追記済みイベント総数。`esAppend` が `SELECT ... FOR UPDATE` で行ロックし、楽観ロックの比較・更新を行う。 |
+| `stream_version.tenant_id` | `UUID` | PK, FK `tenants` | Tenantごとの行。`esAppend` が `SELECT ... FOR UPDATE` で行ロックし、楽観ロックの比較・更新を行う。行が無い（=未初期化）場合は version 0 として扱う。 |
+| `identity_stream_version.id` | `INT` | PK, `CHECK (id = 1)` | Identity stream用の単一行。 |
 
-現状は単一ストリーム（アプリ全体で 1 系列）を前提にしている。複数アグリゲートに分割する場合は `stream_version` を `(stream_id, version)` の複合 PK に拡張し、`events` に `stream_id UUID` 列を追加する形で拡張できる。今の規模ではオーバーエンジニアリングのため見送り、ここに拡張ポイントとして記録するのみにする。
+[Shell/EventStore.hs](../../../src/Shell/EventStore.hs) の `appendToPg` は、追記するイベント群が実際に触れるストリーム（Tenant / Identity）の方だけバージョンを確認・更新する。両方に跨るコマンドは現状のCore実装では発生しないが、発生しても1トランザクション内で両方を扱えるようにしている。
+
+(旧版で「複数アグリゲートに分割する場合はstream_idを追加できる」と書いていた拡張ポイントは、本書のtenant_id導入により実施済みになった。)
 
 ---
 
 ## マイグレーション運用
 
-- スキーマ変更は `Shell.EventStore.migrate` に `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` で追記する。既存の `events` テーブルがある環境に対しては、本書の DDL とは別に移行用の `ALTER TABLE` 文を都度 `migrate` に追加すること（追記専用の原則上、テーブルの再作成は行わない）。
-- `row_hash` / `prev_hash` の導入は既存データへの遡及計算が必要になるため、Haskell 側に移行スクリプトを用意してから `NOT NULL` 制約を追加する2段階移行とする。
+- スキーマ変更は [infra/vm-db/schema.sql](../schema.sql) に追記し、`Shell.EventStore.runMigration` も同じ内容に追従させる。追記専用の原則上、テーブルの再作成は行わない（`ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 等で拡張する）。
+- 適用は `owl_migrator` で行う（`owl_app` では権限不足で失敗する。doc/tenant_isolation.md §6.4）。
+- 単一ストリーム（Stage 1以前）から本スキーマへの移行手順は doc/tenant_isolation.md §7 を参照——既存イベントへの `tenant_id` バックフィルが必要な手動ステップを含む。
+- 改ざん検知用ハッシュ連鎖（`prev_hash`/`row_hash`、spec §7）は本スキーマにまだ含まれていない。導入する場合は `tenant_id` ごとに独立したパーティションとして連鎖する方針が doc/tenant_isolation.md §9 で決まっている——実装時に本書を改訂する。
