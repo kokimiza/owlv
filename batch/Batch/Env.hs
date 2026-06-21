@@ -1,7 +1,7 @@
 module Batch.Env
   ( BatchEnv (..)
   , BatchEffs
-  , loadBatchEnv
+  , loadBatchEnvs
   , runBatch
   , errorToCode
   ) where
@@ -9,10 +9,9 @@ module Batch.Env
 import Effectful
 import Effectful.Error.Static
 
-import Core.Domain.Tenant (defaultTenantId)
 import Shell.AppError (AppError (..))
 import Shell.Effects (AuditLogEff, ClockEff, EventStoreEff, UserCtxEff)
-import Shell.EventStore (EventStore, connectDb, forTenant)
+import Shell.EventStore (EventStore (..), connectDb, forTenant, listActiveTenantIds)
 import Shell.Interpreters.AuditLog (runAuditLogNoOp)
 import Shell.Interpreters.Clock (runClockReal)
 import Shell.Interpreters.EventStore (runEventStorePg)
@@ -34,16 +33,23 @@ type BatchEffs =
    , IOE
    ]
 
-{- | Stage 2（doc/tenant_isolation.md §6.6）: 現状は defaultTenantId 1本に
-固定。複数Tenantを処理対象にする場合は Tenant一覧を読み、各Tenantごとに
-forTenant したハンドルでループする形に拡張する（未実装）。
+{- | doc/tenant_isolation.md §6.6: 処理対象のTenantごとに `forTenant` した
+ハンドルでループする。Tenant一覧は `listActiveTenantIds`（tenant_id/status の
+2列のみの最小権限GRANT、schema.sql）で取得する。1Tenantでも接続に失敗したら
+全体を失敗として返す（部分的に束縛されたハンドルを握ったまま処理を続けない）。
 -}
-loadBatchEnv :: IO (Either AppError BatchEnv)
-loadBatchEnv = do
+loadBatchEnvs :: IO (Either AppError [BatchEnv])
+loadBatchEnvs = do
   connResult <- connectDb
   case connResult of
     Left err -> pure (Left err)
-    Right conn -> fmap BatchEnv <$> forTenant conn defaultTenantId
+    Right conn -> do
+      tidsResult <- listActiveTenantIds conn
+      case tidsResult of
+        Left err -> pure (Left err)
+        Right tids -> do
+          storeResults <- mapM (forTenant conn) tids
+          pure (map BatchEnv <$> sequence storeResults)
 
 {- | 本番インタープリタスタックでバッチジョブを走らせる。
 UserCtx は "batch" 固定。PG バッチロール整備後は runUserCtxPg に切替。

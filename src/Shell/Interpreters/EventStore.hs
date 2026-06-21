@@ -18,3 +18,4 @@ runEventStorePg ::
 runEventStorePg store = interpret $ \_ -> \case
   EsLoad -> liftIO (esLoad store) >>= either throwError pure
   EsAppend ver evts -> liftIO (esAppend store ver evts) >>= either throwError pure
+  EsCurrentTenant -> pure (esTenant store)

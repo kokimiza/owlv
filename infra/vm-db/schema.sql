@@ -89,8 +89,12 @@ CREATE POLICY stream_version_tenant ON stream_version
 -- ── ロール権限 (doc/tenant_isolation.md §6.4) ──────────────────────────────
 -- owl_app: 実行時ロール。所有者ではないため上記RLSが適用される。
 GRANT SELECT, INSERT ON events, stream_version, identity_stream_version TO owl_app;
--- tenants への直接アクセスは与えない —— 全Tenant名の一覧は owl_app からは見えない
+-- tenants への直接アクセスは原則与えない —— 全Tenant名の一覧は owl_app からは見えない
 -- (doc/tenant_isolation.md §6.1: 自分のグラント範囲だけをアプリ層で名前解決する)。
+-- 例外: 日次バッチ（§6.6, _owlbatch が owl_app と同等の権限で実行）は処理対象の
+-- Tenantを自前で列挙する必要があるため、tenant_id/status の2列のみ最小権限で許可する
+-- (Shell.EventStore.listActiveTenantIds)。name/kind/kind_detail 等の付帯情報は渡さない。
+GRANT SELECT (tenant_id, status) ON tenants TO owl_app;
 ALTER ROLE owl_app NOBYPASSRLS;
 
 -- owl_platform_admin: root_admin_username のブートストラップのみが使う。

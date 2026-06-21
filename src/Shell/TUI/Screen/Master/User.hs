@@ -25,7 +25,6 @@ import Brick.Widgets.Edit qualified as E
 import Data.Text qualified as T
 import Graphics.Vty qualified as Vty
 
-import Core.Domain.Tenant (defaultTenantId)
 import Core.Domain.User
   ( Role (..)
   , User (..)
@@ -120,7 +119,7 @@ refreshAfter result st = case result of
     ubE <- liftIO (loadUserBook (appStore st))
     case ubE of
       Left err -> setListError err st
-      Right ub -> B.put st{appScreen = ScreenUserList (initUserList ub)}
+      Right ub -> B.put st{appScreen = ScreenUserList (initUserList (appCurrentTenant st) ub)}
 
 setListError :: AppError -> AppState -> EventM Name AppState ()
 setListError err st = case appScreen st of
@@ -198,8 +197,16 @@ submitUser fs st = do
     Right target -> do
       result <-
         liftIO $
-          -- Stage 1（doc/tenant_isolation.md §5.1）: Tenant選択UIがまだないため defaultTenantId 固定。
-          createUserWithSync (appStore st) (appCurrentUser st) target dispT defaultTenantId (ufRole fs) []
+          -- 新規Userのホームテナントは作成者（actor）の現在Tenant
+          -- (doc/tenant_isolation.md §5.2)。
+          createUserWithSync
+            (appStore st)
+            (appCurrentUser st)
+            target
+            dispT
+            (appCurrentTenant st)
+            (ufRole fs)
+            []
       case result of
         Left err -> B.put st{appScreen = ScreenUserForm fs{ufError = Just err}}
         Right _ -> backToUserList st
@@ -207,7 +214,10 @@ submitUser fs st = do
 backToUserList :: AppState -> EventM Name AppState ()
 backToUserList st = do
   ubE <- liftIO (loadUserBook (appStore st))
-  B.put st{appScreen = ScreenUserList (either (const emptyUserList) initUserList ubE)}
+  B.put
+    st
+      { appScreen = ScreenUserList (either (const emptyUserList) (initUserList (appCurrentTenant st)) ubE)
+      }
  where
   emptyUserList = UserListState [] 0 Nothing
 

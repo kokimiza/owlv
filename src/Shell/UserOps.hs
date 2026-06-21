@@ -111,7 +111,7 @@ setPasswordAsActor store actor target plainPw = do
 判定に落ちて拒否される。これは「同期成功でしか Active にしない」という
 §2.1 の不変条件が正しく機能している証拠であり、バグではない。
 -}
-resolveSessionUser :: EventStore -> Text -> IO (Either Text (UserId, Role))
+resolveSessionUser :: EventStore -> Text -> IO (Either Text (UserId, Role, TenantId))
 resolveSessionUser store osLoginName = case mkUserId osLoginName of
   Left e -> pure (Left e)
   Right uid -> do
@@ -119,7 +119,7 @@ resolveSessionUser store osLoginName = case mkUserId osLoginName of
     case Map.lookup uid (users ub) of
       Just u | userStatus u == Active ->
         case roleInTenant (userHomeTenant u) u of
-          Just role -> pure (Right (uid, role))
+          Just role -> pure (Right (uid, role, userHomeTenant u))
           -- 不変条件違反（ホームテナントのグラントは常に存在するはず）。安全側に拒否する。
           Nothing -> pure (Left ("ユーザーのホームテナント権限が見つかりません: " <> osLoginName))
       Just u ->
@@ -138,7 +138,7 @@ resolveSessionUser store osLoginName = case mkUserId osLoginName of
             result <- createUserWithSync store uid uid osLoginName defaultTenantId Admin []
             case result of
               Left err -> pure (Left (T.pack (show err)))
-              Right _ -> pure (Right (uid, Admin))
+              Right _ -> pure (Right (uid, Admin, defaultTenantId))
           else pure (Left ("owlv ユーザーが登録されていません: " <> osLoginName))
 
 -- | defaultTenantId が未初期化なら作成する。既に存在する場合のエラーは無視する。

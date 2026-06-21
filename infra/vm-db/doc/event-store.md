@@ -47,7 +47,9 @@ CREATE TABLE IF NOT EXISTS tenants (
 );
 ```
 
-`events` への直接 `SELECT` は与えない（doc/tenant_isolation.md §6.1）。`owl_app` からは見えず、`owl_platform_admin`（root_admin_username のブートストラップ専用）からのみ全件参照可能。一覧が必要な通常のTenant利用者は、自分の `userTenantRoles` に含まれる `tenant_id` だけをアプリ層（Haskell側）で名前解決する。
+`tenants` への直接 `SELECT *` は与えない（doc/tenant_isolation.md §6.1）。`owl_platform_admin`（root_admin_username のブートストラップ専用）からのみ全件参照可能。一覧が必要な通常のTenant利用者は、自分の `userTenantRoles` に含まれる `tenant_id` だけをアプリ層（Haskell側）で名前解決する。
+
+例外として、`owl_app` には `tenant_id`/`status` の2列のみに絞った `SELECT` を追加で許可している（doc/tenant_isolation.md §6.6）。日次バッチ（`_owlbatch`、`owl_app` と同等権限で実行）が処理対象のアクティブなTenantを自前で列挙する必要があるため — `name`/`kind`/`kind_detail` 等の付帯情報は渡さない最小権限グラント（[Shell/EventStore.hs](../../../src/Shell/EventStore.hs) の `listActiveTenantIds`、[Batch/Env.hs](../../../batch/Batch/Env.hs) の `loadBatchEnvs`）。
 
 `TenantCreated`/`TenantSuspended`/`TenantArchived` イベントの追記と同一トランザクションでこの表も更新される（[Shell/EventStore.hs](../../../src/Shell/EventStore.hs) の `syncTenantRegistry`）。
 

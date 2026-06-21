@@ -15,6 +15,7 @@ module Core.Domain.User
   , User (..)
   , isActiveAdmin
   , roleInTenant
+  , visibleInTenant
   ) where
 
 import Data.Aeson (FromJSON (..), ToJSON (..))
@@ -133,6 +134,16 @@ instance FromJSON User
 -- | 指定Tenantにおけるロール。グラントがなければ Nothing。
 roleInTenant :: TenantId -> User -> Maybe Role
 roleInTenant tid u = Map.lookup tid (userTenantRoles u)
+
+{- | このUserが指定Tenantの利用者から見えてよいか
+(doc/tenant_isolation.md §4.2, infra/vm-db/doc/event-store.md「Identity stream の
+Tenant単位の絞り込みはアプリ層で行う」)。Identity stream自体は全Tenant共通の
+1本のストリームであり、RLSでは絞り込めない（ログイン解決時点ではどのTenantの
+利用者かまだ確定していないため）。そのためアプリ層（ここ）で
+「閲覧者の現在Tenantに対するグラントを持つUserだけを見せる」を保証する。
+-}
+visibleInTenant :: TenantId -> User -> Bool
+visibleInTenant tid u = Map.member tid (userTenantRoles u)
 
 {- | ホームテナントで Admin かつ Active であることを判定する（Stage 1 の簡略化:
 物理的なTenantストリーム分離前は「ホームテナントの管理者か」で代替する。

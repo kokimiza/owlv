@@ -15,6 +15,7 @@ module Shell.Effects
     EventStoreEff (..)
   , loadEvents
   , appendEvents
+  , currentTenant
 
     -- * Clock
   , ClockEff (..)
@@ -36,6 +37,7 @@ import Data.Time (Day, UTCTime, utctDay)
 import Effectful
 import Effectful.Dispatch.Dynamic
 
+import Core.Domain.Tenant (TenantId)
 import Core.Event (Event)
 import Shell.EventStore (StreamVersion)
 
@@ -44,6 +46,8 @@ import Shell.EventStore (StreamVersion)
 data EventStoreEff :: Effect where
   EsLoad :: EventStoreEff m (StreamVersion, [Event])
   EsAppend :: StreamVersion -> [Event] -> EventStoreEff m ()
+  -- | この EventStore ハンドルが束縛されている Tenant（監査ログ用、§5.5）。
+  EsCurrentTenant :: EventStoreEff m TenantId
 
 type instance DispatchOf EventStoreEff = Dynamic
 
@@ -52,6 +56,9 @@ loadEvents = send EsLoad
 
 appendEvents :: (EventStoreEff :> es) => StreamVersion -> [Event] -> Eff es ()
 appendEvents ver evts = send (EsAppend ver evts)
+
+currentTenant :: (EventStoreEff :> es) => Eff es TenantId
+currentTenant = send EsCurrentTenant
 
 -- ── Clock ────────────────────────────────────────────────────────────────────
 
@@ -82,6 +89,11 @@ data AuditEntry = AuditEntry
   { auditUser :: Text
   , auditAt :: UTCTime
   , auditEvents :: [Event]
+  , auditTenant :: Maybe TenantId
+  {- ^ 操作対象 Tenant。Identity stream 操作（ユーザー管理等）は Nothing
+  (doc/tenant_isolation.md §5.5: 「誰が・いつ・どのTenantを開いたか」を
+  監査証跡として残す)。
+  -}
   }
   deriving (Show)
 

@@ -17,6 +17,7 @@ import Brick.Widgets.Center qualified as BC
 import Database.PostgreSQL.Simple qualified as PG
 import Graphics.Vty qualified as V
 
+import Core.Domain.Tenant (TenantId)
 import Core.Domain.User (Role, UserId)
 import Core.State (initialMasterBook)
 import Shell.CommandExecutor (loadMasterBook)
@@ -70,8 +71,8 @@ import Shell.TUI.Types
 
 -- ── Entry point ──────────────────────────────────────────────────────────────
 
-runTUI :: PG.Connection -> EventStore -> UserId -> Role -> IO ()
-runTUI conn store currentUser currentRole = do
+runTUI :: PG.Connection -> EventStore -> UserId -> Role -> TenantId -> IO ()
+runTUI conn store currentUser currentRole currentTenant = do
   chan <- newBChan 16
   let initState =
         AppState
@@ -83,6 +84,7 @@ runTUI conn store currentUser currentRole = do
           , appCatalog = defaultCatalog
           , appCurrentUser = currentUser
           , appCurrentRole = currentRole
+          , appCurrentTenant = currentTenant
           }
   initialVty <- mkVty V.defaultConfig
   void $ B.customMain initialVty (mkVty V.defaultConfig) (Just chan) owlvApp initState

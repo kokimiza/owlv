@@ -33,6 +33,7 @@ module Shell.EventStore
   , EventStore (..)
   , connectDb
   , forTenant
+  , listActiveTenantIds
   , runMigration
   ) where
 
@@ -69,6 +70,11 @@ another writer has already advanced a stream that this append touches.
 data EventStore = EventStore
   { esLoad :: IO (Either AppError (StreamVersion, [Event]))
   , esAppend :: StreamVersion -> [Event] -> IO (Either AppError ())
+  , esTenant :: TenantId
+  {- ^ このハンドルが束縛されている Tenant（監査ログ用、doc/tenant_isolation.md §5.5）。
+  呼び出し側がこれを使って別の Tenant の `esLoad`/`esAppend` を組み立てることは
+  できない（あくまで「既に束縛済みのハンドルがどの Tenant か」を読み取るだけ）。
+  -}
   }
 
 {- | Connect to PostgreSQL. No DDL here — schema migration is an explicit,
@@ -118,11 +124,24 @@ forTenant conn tid = do
     Left ex -> Left (AppStorageError (T.pack (show ex)))
     Right _ -> Right (mkTenantStore conn tid)
 
+{- | アクティブな Tenant の一覧（doc/tenant_isolation.md §6.6: 日次バッチを
+Tenantごとにループさせるための列挙）。`tenants` テーブルへの無条件 SELECT は
+§6.1 で原則禁止（全Tenant名を見せない）だが、列を `tenant_id`/`status` だけに
+絞った最小権限の GRANT を `owl_app` に追加で与える運用判断とする（schema.sql
+参照）— バッチが処理対象を決めるには列挙手段が必須であり、名前やkind等の
+付帯情報までは渡さない。
+-}
+listActiveTenantIds :: PG.Connection -> IO (Either AppError [TenantId])
+listActiveTenantIds conn = safeIO $ do
+  rows <- PG.query_ conn "SELECT tenant_id FROM tenants WHERE status = 'active'" :: IO [PG.Only Text]
+  pure (map (TenantId . (\(PG.Only t) -> t)) rows)
+
 mkTenantStore :: PG.Connection -> TenantId -> EventStore
 mkTenantStore conn tid =
   EventStore
     { esLoad = safeIO (loadFromPg conn tid)
     , esAppend = appendToPg conn tid
+    , esTenant = tid
     }
 
 -- | Tenant streamとIdentity streamをマージしてseq順に読む。
@@ -400,4 +419,7 @@ runMigration conn = do
       \) WITH CHECK ( \
       \  tenant_id = current_setting('app.tenant_id', true)::uuid \
       \)"
+  -- 日次バッチが処理対象Tenantを自前で列挙するための最小権限GRANT
+  -- (doc/tenant_isolation.md §6.6, listActiveTenantIds)。
+  _ <- PG.execute_ conn "GRANT SELECT (tenant_id, status) ON tenants TO owl_app"
   pure ()

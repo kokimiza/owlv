@@ -91,7 +91,8 @@ import Core.Domain.Journal (DrCr (..), JournalActionType (..), JournalEntry, Ris
 import Core.Domain.Organisation (Organisation (..), OrganisationId (..))
 import Core.Domain.Partner (Partner (..), PartnerId (..), PartnerType (..))
 import Core.Domain.SubAccount (SubAccount (..), SubAccountId (..))
-import Core.Domain.User (Role (..), User (..), UserId)
+import Core.Domain.Tenant (TenantId)
+import Core.Domain.User (Role (..), User (..), UserId, visibleInTenant)
 import Core.Event (Event)
 import Core.State (MasterBook (..), UserBook (..))
 import Shell.AppError (AppError)
@@ -514,10 +515,14 @@ data UserListState = UserListState
   , ulError :: Maybe AppError
   }
 
-initUserList :: UserBook -> UserListState
-initUserList ub =
+{- | 閲覧者の現在Tenantに対するグラントを持つUserだけを一覧に出す
+(doc/tenant_isolation.md §4.2, infra/vm-db/doc/event-store.md: Identity stream は
+RLSでTenant別に絞れないため、アプリ層でここが最後の絞り込み地点になる)。
+-}
+initUserList :: TenantId -> UserBook -> UserListState
+initUserList tid ub =
   UserListState
-    { ulUsers = map snd (Map.toAscList (users ub))
+    { ulUsers = filter (visibleInTenant tid) (map snd (Map.toAscList (users ub)))
     , ulSelected = 0
     , ulError = Nothing
     }
@@ -568,6 +573,7 @@ data AppState = AppState
   , appCatalog :: ErrorCatalog
   , appCurrentUser :: UserId -- .claude/user.md §4.1: SSH 確立時に解決済みの actor
   , appCurrentRole :: Role -- ユーザー管理画面の表示制御（Admin のみ）に使う
+  , appCurrentTenant :: TenantId -- doc/tenant_isolation.md §4.2: Identity stream のアプリ層絞り込みに使う
   }
 
 -- ── internal helpers ─────────────────────────────────────────────────────────

@@ -46,11 +46,13 @@ import Shell.Effects
   , EventStoreEff
   , UserCtxEff
   , appendEvents
+  , currentTenant
   , getCurrentTime
   , getCurrentUser
   , loadEvents
   , logAudit
   )
+import Shell.EventClassification (isIdentityEvent)
 import Shell.EventStore (EventStore (..))
 
 -- | 楽観ロック競合時の最大リトライ回数。
@@ -82,8 +84,9 @@ loadProjection store project = runExceptT do
   (_, events) <- ExceptT (esLoad store)
   pure (project (foldl' evolve initialAppBook events))
 
--- | Rebuild the MasterBook read-model by replaying all events.
--- Call after any successful master command to refresh the TUI cache.
+{- | Rebuild the MasterBook read-model by replaying all events.
+Call after any successful master command to refresh the TUI cache.
+-}
 loadMasterBook :: EventStore -> IO (Either AppError MasterBook)
 loadMasterBook store = loadProjection store appMasters
 
@@ -123,7 +126,11 @@ executeCommandEff cmd = go maxRetries
       Right () -> do
         now <- getCurrentTime
         user <- getCurrentUser
-        logAudit (AuditEntry user now newEvts)
+        tid <- currentTenant
+        -- Identity stream のみのコマンド（ユーザー管理等）は対象Tenantを持たない
+        -- (doc/tenant_isolation.md §5.5)。
+        let auditedTenant = if all isIdentityEvent newEvts then Nothing else Just tid
+        logAudit (AuditEntry user now newEvts auditedTenant)
         pure newEvts
 
 loadProjectionEff :: (Error AppError :> es, EventStoreEff :> es) => (AppBook -> a) -> Eff es a

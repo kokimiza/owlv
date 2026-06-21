@@ -61,7 +61,7 @@ handleMasterMenuEv (VtyEvent (Vty.EvKey (Vty.KChar '5') [])) st
       ubE <- liftIO (loadUserBook (appStore st))
       case ubE of
         Left _ -> pure ()
-        Right ub -> B.put st{appScreen = ScreenUserList (initUserList ub)}
+        Right ub -> B.put st{appScreen = ScreenUserList (initUserList (appCurrentTenant st) ub)}
 handleMasterMenuEv (VtyEvent (Vty.EvKey Vty.KEsc [])) st =
   B.put st{appScreen = ScreenMenu}
 handleMasterMenuEv _ _ = pure ()

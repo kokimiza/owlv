@@ -113,6 +113,7 @@ executable owlv
     build-depends:
         base >= 4.20,
         text >= 2.0,
+        mtl  >= 2.3,
         owlv
     default-language: GHC2024
 
@@ -148,6 +149,7 @@ test-suite owlv-test
         Core.JudgmentLogSpec
         Core.ClosingSpec
         Core.UserSpec
+        Core.TenantSpec
     build-depends:
         owlv,
         effectful        >= 2.3,
