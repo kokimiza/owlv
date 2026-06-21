@@ -21,6 +21,7 @@ FORGEJO_VERSION="${FORGEJO_VERSION:-7.0.4}"
 FORGEJO_USER="git"
 FORGEJO_HOME="/home/git"
 FORGEJO_DATA="/var/forgejo"
+FORGEJO_STATIC_ROOT="/usr/local/share/forgejo"
 
 # Forgejo セキュリティ値をプロビジョニング時に生成 (Web UI での手動設定を排除)
 FORGEJO_SECRET_KEY=$(openssl rand -hex 32)     # 64 文字 hex
@@ -47,7 +48,7 @@ _log "Forgejo ${FORGEJO_VERSION} をソースからビルド"
 FORGEJO_BIN="/usr/local/bin/forgejo"
 FORGEJO_SRC="/tmp/forgejo-build"
 
-if [ ! -f "$FORGEJO_BIN" ]; then
+if [ ! -f "$FORGEJO_BIN" ] || [ ! -d "$FORGEJO_STATIC_ROOT/options" ]; then
 	pkg_add go 2>/dev/null || _die "go のインストールに失敗しました"
 
 	ftp -o "${FORGEJO_SRC}.tar.gz" \
@@ -88,6 +89,14 @@ if [ ! -f "$FORGEJO_BIN" ]; then
 	# ビルド専用キャッシュなので完了後は破棄してディスクを回収する
 	rm -rf "$GOPATH"
 
+	# bindata タグなしビルドは options/ (ロケール) public/ templates/ を
+	# 実行時に disk から読む (STATIC_ROOT_PATH 配下)。ソースツリー削除前に
+	# 永続先へ退避しておく (これを怠ると翻訳ファイル欠落で起動時に fatal)
+	install -d "$FORGEJO_STATIC_ROOT"
+	cp -R "$FORGEJO_SRC/options" "$FORGEJO_SRC/public" "$FORGEJO_SRC/templates" \
+		"$FORGEJO_STATIC_ROOT/"
+	chown -R root:wheel "$FORGEJO_STATIC_ROOT"
+
 	chmod 755 "$FORGEJO_BIN"
 	rm -rf "$FORGEJO_SRC"
 	_ok "Forgejo バイナリ: ${FORGEJO_BIN}"
@@ -113,6 +122,7 @@ HTTP_PORT        = 3000
 ROOT_URL         = http://${OWL_GIT_IP}:3000/
 DISABLE_SSH      = false
 SSH_PORT         = 22
+STATIC_ROOT_PATH = ${FORGEJO_STATIC_ROOT}
 
 [database]
 DB_TYPE  = sqlite3
