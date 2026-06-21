@@ -1,3 +1,5 @@
+{-# LANGUAGE BlockArguments #-}
+
 -- | 組織マスタ画面（一覧 + フォーム）
 module Shell.TUI.Screen.Master.Organisation
   ( drawOrgList
@@ -7,6 +9,7 @@ module Shell.TUI.Screen.Master.Organisation
   ) where
 
 import Brick (BrickEvent (..), EventM, Widget, str, txt, withAttr)
+import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 
 import Brick qualified as B
@@ -134,19 +137,14 @@ handleOrgFormEv ev fs st = case ofFocus fs of
     _ -> pure ()
 
 submitOrg :: OrgFormState -> AppState -> EventM Name AppState ()
-submitOrg fs st = do
-  let codeT = edText (ofCode fs)
-      nameT = edText (ofName fs)
-      parentT = edText (ofParent fs)
-  case mkOrganisationId codeT of
-    Left err -> B.put st{appScreen = ScreenOrgForm fs{ofError = Just (AppInputError err)}}
-    Right oid -> do
+submitOrg fs st =
+  runExceptT
+    do
+      oid <- withExceptT AppInputError (liftEither (mkOrganisationId codeT))
       let parent =
             if T.null parentT
               then Nothing
-              else case mkOrganisationId parentT of
-                Right pid -> Just pid
-                Left _ -> Nothing
+              else either (const Nothing) Just (mkOrganisationId parentT)
           org =
             Organisation
               { orgId = oid
@@ -155,17 +153,21 @@ submitOrg fs st = do
               , orgActive = ofActive fs
               }
           cmd = if ofIsNew fs then RegisterOrganisation org else UpdateOrganisation org
-      result <- liftIO (executeCommand (appStore st) cmd)
-      case result of
-        Left err -> B.put st{appScreen = ScreenOrgForm fs{ofError = Just err}}
-        Right _ -> do
-          mb <- liftIO (loadMasterBook (appStore st))
-          let newMasters = either (const (appMasters st)) id mb
-          B.put
-            st
-              { appMasters = newMasters
-              , appScreen = ScreenOrgList (initOrgList newMasters)
-              }
+      _ <- ExceptT (liftIO (executeCommand (appStore st) cmd))
+      mb <- liftIO (loadMasterBook (appStore st))
+      pure (either (const (appMasters st)) id mb)
+    >>= \case
+      Left err -> B.put st{appScreen = ScreenOrgForm fs{ofError = Just err}}
+      Right newMasters ->
+        B.put
+          st
+            { appMasters = newMasters
+            , appScreen = ScreenOrgList (initOrgList newMasters)
+            }
+ where
+  codeT = edText (ofCode fs)
+  nameT = edText (ofName fs)
+  parentT = edText (ofParent fs)
 
 -- ── internal ──────────────────────────────────────────────────────────────────
 

@@ -1,3 +1,5 @@
+{-# LANGUAGE BlockArguments #-}
+
 {- | ユーザー管理画面 (.claude/user.md)
 
 一覧 + 新規作成フォーム + SSH 鍵追加フォーム。Admin のみが新規作成・ロール変更・
@@ -14,6 +16,7 @@ module Shell.TUI.Screen.Master.User
   ) where
 
 import Brick (BrickEvent (..), EventM, Widget, str, txt, withAttr)
+import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Maybe (fromMaybe)
 
@@ -113,11 +116,12 @@ withSelected ls act = case safeIndex (ulUsers ls) (ulSelected ls) of
   Nothing -> pure ()
 
 refreshAfter :: Either AppError [a] -> AppState -> EventM Name AppState ()
-refreshAfter result st = case result of
-  Left err -> setListError err st
-  Right _ -> do
-    ubE <- liftIO (loadUserBook (appStore st))
-    case ubE of
+refreshAfter result st =
+  runExceptT
+    do
+      _ <- liftEither result
+      ExceptT (liftIO (loadUserBook (appStore st)))
+    >>= \case
       Left err -> setListError err st
       Right ub -> B.put st{appScreen = ScreenUserList (initUserList (appCurrentTenant st) ub)}
 
@@ -189,16 +193,14 @@ cycleRole d r =
   in allRoles !! (((idx + d) `mod` n + n) `mod` n)
 
 submitUser :: UserFormState -> AppState -> EventM Name AppState ()
-submitUser fs st = do
-  let nameT = edText (ufUsername fs)
-      dispT = edText (ufDisplayName fs)
-  case mkUserId nameT of
-    Left err -> B.put st{appScreen = ScreenUserForm fs{ufError = Just (AppInputError err)}}
-    Right target -> do
-      result <-
+submitUser fs st =
+  runExceptT
+    do
+      target <- withExceptT AppInputError (liftEither (mkUserId nameT))
+      -- 新規Userのホームテナントは作成者（actor）の現在Tenant
+      -- (doc/tenant_isolation.md §5.2)。
+      ExceptT $
         liftIO $
-          -- 新規Userのホームテナントは作成者（actor）の現在Tenant
-          -- (doc/tenant_isolation.md §5.2)。
           createUserWithSync
             (appStore st)
             (appCurrentUser st)
@@ -207,9 +209,12 @@ submitUser fs st = do
             (appCurrentTenant st)
             (ufRole fs)
             []
-      case result of
-        Left err -> B.put st{appScreen = ScreenUserForm fs{ufError = Just err}}
-        Right _ -> backToUserList st
+    >>= \case
+      Left err -> B.put st{appScreen = ScreenUserForm fs{ufError = Just err}}
+      Right _ -> backToUserList st
+ where
+  nameT = edText (ufUsername fs)
+  dispT = edText (ufDisplayName fs)
 
 backToUserList :: AppState -> EventM Name AppState ()
 backToUserList st = do

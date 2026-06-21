@@ -45,9 +45,11 @@ disk   = "/var/vmm/build.img"
 size   = "50G"
 
 [toolchain]
-# ports 提供バージョンを正とする (§3.1)
-ghc_version   = "9.6"
-cabal_version = "3.10"
+# (base ^>= 4.20 / GHC >= 9.10) を満たすには OpenBSD 7.9 (現行、
+# 2026-05-19 リリース) の packages/amd64 にある ghc-9.10.1 が必要
+# (7.8 までの ghc-9.8.3 では base が古く要件を満たせない)
+ghc_version   = "9.10.1"
+cabal_version = "3.16.1.0"
 owl_version   = ""   # デプロイ時に vX.Y.Z を設定
 
 [app]

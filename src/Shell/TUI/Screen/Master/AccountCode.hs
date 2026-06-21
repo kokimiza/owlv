@@ -1,3 +1,5 @@
+{-# LANGUAGE BlockArguments #-}
+
 -- | 勘定科目マスタ画面（一覧 + フォーム）
 module Shell.TUI.Screen.Master.AccountCode
   ( drawAccountList
@@ -7,6 +9,7 @@ module Shell.TUI.Screen.Master.AccountCode
   ) where
 
 import Brick (BrickEvent (..), EventM, Widget, str, txt, withAttr)
+import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 
 import Brick qualified as B
@@ -161,11 +164,10 @@ handleAccountFormEv ev fs st = case affFocus fs of
     _ -> pure ()
 
 submitAccount :: AccountFormState -> AppState -> EventM Name AppState ()
-submitAccount fs st = do
-  let codeT = edText (affCode fs)
-  case mkAccountCode codeT of
-    Left err -> B.put st{appScreen = ScreenAccountForm fs{affError = Just (AppInputError err)}}
-    Right ac -> do
+submitAccount fs st =
+  runExceptT
+    do
+      ac <- withExceptT AppInputError (liftEither (mkAccountCode codeT))
       let am =
             AccountMaster
               { amCode = ac
@@ -176,17 +178,19 @@ submitAccount fs st = do
               , amActive = affActive fs
               }
           cmd = if affIsNew fs then RegisterAccountMaster am else UpdateAccountMaster am
-      result <- liftIO (executeCommand (appStore st) cmd)
-      case result of
-        Left err -> B.put st{appScreen = ScreenAccountForm fs{affError = Just err}}
-        Right _ -> do
-          mb <- liftIO (loadMasterBook (appStore st))
-          let newMasters = either (const (appMasters st)) id mb
-          B.put
-            st
-              { appMasters = newMasters
-              , appScreen = ScreenAccountList (initAccountList newMasters)
-              }
+      _ <- ExceptT (liftIO (executeCommand (appStore st) cmd))
+      mb <- liftIO (loadMasterBook (appStore st))
+      pure (either (const (appMasters st)) id mb)
+    >>= \case
+      Left err -> B.put st{appScreen = ScreenAccountForm fs{affError = Just err}}
+      Right newMasters ->
+        B.put
+          st
+            { appMasters = newMasters
+            , appScreen = ScreenAccountList (initAccountList newMasters)
+            }
+ where
+  codeT = edText (affCode fs)
 
 safeIndex :: [a] -> Int -> Maybe a
 safeIndex [] _ = Nothing

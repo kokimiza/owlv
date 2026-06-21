@@ -1,3 +1,5 @@
+{-# LANGUAGE BlockArguments #-}
+
 -- | 取引先マスタ画面（一覧 + フォーム）
 module Shell.TUI.Screen.Master.Partner
   ( drawPartnerList
@@ -7,6 +9,7 @@ module Shell.TUI.Screen.Master.Partner
   ) where
 
 import Brick (BrickEvent (..), EventM, Widget, str, txt, withAttr)
+import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 
 import Brick qualified as B
@@ -133,11 +136,10 @@ handlePartnerFormEv ev fs st = case pfFocus fs of
     _ -> pure ()
 
 submitPartner :: PartnerFormState -> AppState -> EventM Name AppState ()
-submitPartner fs st = do
-  let codeT = edText (pfCode fs)
-  case mkPartnerId codeT of
-    Left err -> B.put st{appScreen = ScreenPartnerForm fs{pfError = Just (AppInputError err)}}
-    Right pid -> do
+submitPartner fs st =
+  runExceptT
+    do
+      pid <- withExceptT AppInputError (liftEither (mkPartnerId codeT))
       let p =
             Partner
               { partnerId = pid
@@ -146,17 +148,19 @@ submitPartner fs st = do
               , partnerActive = pfActive fs
               }
           cmd = if pfIsNew fs then RegisterPartner p else UpdatePartner p
-      result <- liftIO (executeCommand (appStore st) cmd)
-      case result of
-        Left err -> B.put st{appScreen = ScreenPartnerForm fs{pfError = Just err}}
-        Right _ -> do
-          mb <- liftIO (loadMasterBook (appStore st))
-          let newMasters = either (const (appMasters st)) id mb
-          B.put
-            st
-              { appMasters = newMasters
-              , appScreen = ScreenPartnerList (initPartnerList newMasters)
-              }
+      _ <- ExceptT (liftIO (executeCommand (appStore st) cmd))
+      mb <- liftIO (loadMasterBook (appStore st))
+      pure (either (const (appMasters st)) id mb)
+    >>= \case
+      Left err -> B.put st{appScreen = ScreenPartnerForm fs{pfError = Just err}}
+      Right newMasters ->
+        B.put
+          st
+            { appMasters = newMasters
+            , appScreen = ScreenPartnerList (initPartnerList newMasters)
+            }
+ where
+  codeT = edText (pfCode fs)
 
 -- ── internal ──────────────────────────────────────────────────────────────────
 

@@ -1,3 +1,5 @@
+{-# LANGUAGE BlockArguments #-}
+
 -- | 補助科目マスタ画面（一覧 + フォーム）
 module Shell.TUI.Screen.Master.SubAccount
   ( drawSubAccList
@@ -7,6 +9,7 @@ module Shell.TUI.Screen.Master.SubAccount
   ) where
 
 import Brick (BrickEvent (..), EventM, Widget, str, txt, withAttr)
+import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 
 import Brick qualified as B
@@ -136,15 +139,11 @@ handleSubAccFormEv ev fs st = case safFocus fs of
     _ -> pure ()
 
 submitSubAcc :: SubAccFormState -> AppState -> EventM Name AppState ()
-submitSubAcc fs st = do
-  let codeT = edText (safCode fs)
-      parentT = edText (safParent fs)
-  case (mkSubAccountId codeT, mkAccountCode parentT) of
-    (Left err, _) ->
-      B.put st{appScreen = ScreenSubAccForm fs{safError = Just (AppInputError err)}}
-    (_, Left err) ->
-      B.put st{appScreen = ScreenSubAccForm fs{safError = Just (AppInputError err)}}
-    (Right sid, Right parentAc) -> do
+submitSubAcc fs st =
+  runExceptT
+    do
+      sid <- withExceptT AppInputError (liftEither (mkSubAccountId codeT))
+      parentAc <- withExceptT AppInputError (liftEither (mkAccountCode parentT))
       let sa =
             SubAccount
               { saId = sid
@@ -153,17 +152,20 @@ submitSubAcc fs st = do
               , saActive = safActive fs
               }
           cmd = if safIsNew fs then RegisterSubAccount sa else UpdateSubAccount sa
-      result <- liftIO (executeCommand (appStore st) cmd)
-      case result of
-        Left err -> B.put st{appScreen = ScreenSubAccForm fs{safError = Just err}}
-        Right _ -> do
-          mb <- liftIO (loadMasterBook (appStore st))
-          let newMasters = either (const (appMasters st)) id mb
-          B.put
-            st
-              { appMasters = newMasters
-              , appScreen = ScreenSubAccList (initSubAccList newMasters)
-              }
+      _ <- ExceptT (liftIO (executeCommand (appStore st) cmd))
+      mb <- liftIO (loadMasterBook (appStore st))
+      pure (either (const (appMasters st)) id mb)
+    >>= \case
+      Left err -> B.put st{appScreen = ScreenSubAccForm fs{safError = Just err}}
+      Right newMasters ->
+        B.put
+          st
+            { appMasters = newMasters
+            , appScreen = ScreenSubAccList (initSubAccList newMasters)
+            }
+ where
+  codeT = edText (safCode fs)
+  parentT = edText (safParent fs)
 
 safeIndex :: [a] -> Int -> Maybe a
 safeIndex [] _ = Nothing

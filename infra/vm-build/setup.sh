@@ -18,7 +18,12 @@ _ok() { _log "  ✓ $*"; }
 OWL_BUILD_IP="${OWL_BUILD_IP:?OWL_BUILD_IP is required}"
 OWL_GIT_IP="${OWL_GIT_IP:?OWL_GIT_IP is required}"
 FORGEJO_RUNNER_SECRET="${FORGEJO_RUNNER_SECRET:?FORGEJO_RUNNER_SECRET is required}"
-GHC_VERSION="${GHC_VERSION:-9.6}"
+# GHC2024 (base ^>= 4.20 / GHC >= 9.10) を要求する。OpenBSD 7.9
+# (2026-05-19 リリース、現行) の packages/amd64 には ghc-9.10.1.tgz のみが
+# 存在し (7.8 までの ghc-9.8.3 では base が古く GHC2024 を満たせない)、
+# 旧デフォルト "9.6" は実在しないパッケージ名で pkg_add が必ず失敗していた
+# (実際に発生: "Can't find ghc-9.6")。
+GHC_VERSION="${GHC_VERSION:-9.10.1}"
 FORGEJO_RUNNER_VERSION="3.5.0"
 
 _log "Build VM セットアップ開始 (${OWL_BUILD_IP})"
