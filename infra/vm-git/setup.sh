@@ -171,6 +171,11 @@ daemon_logger="daemon.info"
 # 初回起動は SQLite スキーマの自動マイグレーション (~80 テーブル) が走り、
 # rc.subr の既定 30 秒では非力な VM 上でタイムアウトすることがある
 daemon_timeout=180
+# forgejo web は自分自身をデーモン化(fork+detach)しない。rc_bg を立てないと
+# rc.subr は子プロセスが detach するのを待ち続け、フォアグラウンドで動き
+# 続ける forgejo に対して毎回 daemon_timeout 一杯まで待って失敗する
+# (実際に発生: ログにはプロセス起動成功が出るのに rcctl start は timeout 終了)
+rc_bg="YES"
 
 . /etc/rc.d/rc.subr
 rc_cmd $1
