@@ -17,7 +17,9 @@ _ok() { _log "  ✓ $*"; }
 
 OWL_GIT_IP="${OWL_GIT_IP:?OWL_GIT_IP is required}"
 FORGEJO_RUNNER_SECRET="${FORGEJO_RUNNER_SECRET:?FORGEJO_RUNNER_SECRET is required}"
-FORGEJO_VERSION="${FORGEJO_VERSION:-7.0.4}"
+# 既定値は owl-config.toml [forgejo].version と一致させておく
+# (08-vm-provision.sh が通常はそちらを env 経由で渡す)
+FORGEJO_VERSION="${FORGEJO_VERSION:-15.0.3}"
 FORGEJO_USER="git"
 FORGEJO_HOME="/home/git"
 FORGEJO_DATA="/var/forgejo"
