@@ -1,4 +1,4 @@
-{- | Argon2id パスワードハッシュ (.claude/user.md §2.3)
+{- | Argon2id パスワードハッシュ (doc/user.md §2.3)
 
 owlv の userPasswordHash は SSH 認証の代替ではなく、アプリ内のステップアップ
 確認専用 (画面承認直前の再入力等)。ハッシュ計算は副作用なので Shell が
@@ -6,7 +6,7 @@ owlv の userPasswordHash は SSH 認証の代替ではなく、アプリ内の�
 (sandwich pattern)。
 
 crypton の Crypto.KDF.Argon2 は libargon2 リファレンス実装を同梱ビルドするため
-外部Cライブラリの事前インストールは不要 (.claude/user.md §2.3 脚注)。
+外部Cライブラリの事前インストールは不要 (doc/user.md §2.3 脚注)。
 -}
 module Shell.Interpreters.PasswordHash
   ( hashPassword

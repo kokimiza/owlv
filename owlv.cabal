@@ -95,13 +95,13 @@ library
         -- GHC boot package なので追加インストール不要。
         mtl               >= 2.3,
         -- パスワードハッシュ (Argon2id, §2.3): crypton は libargon2 を同梱ビルドするため
-        -- 外部Cライブラリの事前インストールは不要 (.claude/user.md §2.3)。
+        -- 外部Cライブラリの事前インストールは不要 (doc/user.md §2.3)。
         -- argon2 パッケージ(hvr/argon2)は base<4.18 に固定され GHC2024(base>=4.20)と
         -- 不整合のため、メンテナンスされている crypton 経由で同じ実装を使う。
         crypton           >= 1.0,
         memory            >= 0.18,
         base64-bytestring >= 1.2,
-        -- SSH 確立した OS ログイン名の取得 (.claude/user.md §4.1)。GHC boot package。
+        -- SSH 確立した OS ログイン名の取得 (doc/user.md §4.1)。GHC boot package。
         unix              >= 2.8
     default-language: GHC2024
 

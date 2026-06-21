@@ -20,7 +20,7 @@ cabal build --ghc-options="-Werror"           # CI-equivalent build
 `owlv` is an IFRS-compliant personal-finance TUI: Haskell + brick, Event Sourcing + CQRS.
 Event store: SQLite (append-only). Read model: RocksDB.
 
-The domain specification is [.claude/ifrs_standard.md](.claude/ifrs_standard.md) (Japanese, v2.0) — the single authoritative source for all accounting logic, including the nine-phase closing pipeline (§1.2). Read the relevant section before implementing any accounting or closing-process feature. Do not duplicate spec content into this file or into docs; reference it by section number.
+The domain specification is [doc/ifrs_standard.md](doc/ifrs_standard.md) (Japanese, v2.0) — the single authoritative source for all accounting logic, including the nine-phase closing pipeline (§1.2). Read the relevant section before implementing any accounting or closing-process feature. Do not duplicate spec content into this file or into docs; reference it by section number.
 
 ## Architecture: FCIS (Functional Core, Imperative Shell)
 
@@ -65,7 +65,7 @@ Shell orchestration must load all required data up front (sandwich pattern) so t
 
 ## Domain reference map
 
-[.claude/ifrs_standard.md](.claude/ifrs_standard.md):
+[doc/ifrs_standard.md](doc/ifrs_standard.md):
 
 - §2 — Financial information infrastructure (journal classifications, ledgers, carrying amount, fixed assets)
 - §3 — Materiality thresholds and risk tiers

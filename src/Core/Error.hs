@@ -116,7 +116,7 @@ data DomainError
     TenantAlreadySuspended TenantId
   | -- | 既に廃止済みのTenantへの操作
     TenantAlreadyArchived TenantId
-  | {- | ユーザー管理エラー (.claude/user.md §2) ─────────────────────────
+  | {- | ユーザー管理エラー (doc/user.md §2) ─────────────────────────
     | ユーザー名が POSIX 制約を満たさない
     -}
     InvalidUserId Text

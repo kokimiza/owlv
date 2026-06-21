@@ -2,7 +2,7 @@
 # ap-admin-user.sh — AP VM に root_admin_username の OS アカウントを作成
 #
 # owl-config.toml [user] root_admin_username は owlv が Admin ロールを
-# 自動付与する唯一の OS ユーザー名 (.claude/user.md §7)。このユーザー自体は
+# 自動付与する唯一の OS ユーザー名 (doc/user.md §7)。このユーザー自体は
 # owl-user-sync の管轄外 (鶏卵問題) なので、provision.sh では作成できず
 # AP VM 上に手動で作る必要がある (vm-ap/setup.sh 終端コメント参照)。
 #

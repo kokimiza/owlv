@@ -1,4 +1,4 @@
-{- | ユーザー管理のオーケストレーション (.claude/user.md §3)
+{- | ユーザー管理のオーケストレーション (doc/user.md §3)
 
 CLAUDE.md の方針通り、ここは独立した UseCases レイヤーではなく Shell に置く
 薄いオーケストレーションである: Core コマンドを発行 → 成功したら OS 同期
@@ -97,7 +97,7 @@ setPasswordAsActor store actor target plainPw = do
   hash <- hashPassword plainPw
   executeCommand store (SetUserPasswordHash actor target hash)
 
-{- | SSH 確立時のセッション解決 (.claude/user.md §4.1, §7)。
+{- | SSH 確立時のセッション解決 (doc/user.md §4.1, §7)。
 
 1. OS ログイン名と同名の Active な User が見つかれば、それを身元として認める。
 2. 見つからず、かつ Active な Admin が1人もおらず、かつ OS ログイン名が

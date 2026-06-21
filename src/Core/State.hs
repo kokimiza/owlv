@@ -152,7 +152,7 @@ newtype TaxBook = TaxBook
 initialTaxBook :: TaxBook
 initialTaxBook = TaxBook Map.empty
 
-{- | ユーザーマスタの読みモデル (.claude/user.md §2)
+{- | ユーザーマスタの読みモデル (doc/user.md §2)
 
 ubNextUid: 次に割り当てる OS UID（単調増加・再利用しない）。
 ubPendingEscalations: Admin 昇格の提案中マップ（対象 → 提案者）。承認で消費される。

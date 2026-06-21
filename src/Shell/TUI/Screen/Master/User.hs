@@ -1,6 +1,6 @@
 {-# LANGUAGE BlockArguments #-}
 
-{- | ユーザー管理画面 (.claude/user.md)
+{- | ユーザー管理画面 (doc/user.md)
 
 一覧 + 新規作成フォーム + SSH 鍵追加フォーム。Admin のみが新規作成・ロール変更・
 停止/再開/削除を行える（実際の権限チェックは Core.Decide が担う。ここでの

@@ -321,14 +321,14 @@ decide book (ArchiveTenant actor tid) = do
   check (tenantId t /= tid) (TenantIdMismatch (tenantId t) tid)
   check (tenantStatus t == TenantStatusArchived) (TenantAlreadyArchived tid)
   pure [TenantArchived tid]
--- ── ユーザー管理 (.claude/user.md §2) ───────────────────────────────────────
+-- ── ユーザー管理 (doc/user.md §2) ───────────────────────────────────────
 
 decide book (CreateUser actor target name homeTenant role scopes) = do
   let ub = appUsers book
   checkValid (mkUserId (unUserId target)) InvalidUserId
   check (Map.member target (users ub)) (DuplicateUserId target)
   -- ブートストラップ例外: Active な Admin が1人もいなければ actor 検証を免除する
-  -- (.claude/user.md §7: 実際に発火するのを root_admin_username だけに絞るのは Shell の責務)
+  -- (doc/user.md §7: 実際に発火するのを root_admin_username だけに絞るのは Shell の責務)
   if activeAdminCount ub == 0
     then pure [UserCreated target (ubNextUid ub) name homeTenant role scopes]
     else do
@@ -527,7 +527,7 @@ lookupCurrentTenant book = case appTenant book of
   Nothing -> Left TenantNotInitialized
   Just t -> Right t
 
--- ── ユーザー管理ヘルパー (.claude/user.md §2) ───────────────────────────────
+-- ── ユーザー管理ヘルパー (doc/user.md §2) ───────────────────────────────
 
 -- | Removed（終端状態）以外のユーザーを取得する。
 lookupLiveUser :: UserBook -> UserId -> Either DomainError User

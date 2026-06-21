@@ -70,7 +70,7 @@ data Event
     TenantCreated Tenant
   | TenantSuspended TenantId
   | TenantArchived TenantId
-  | -- ユーザー管理 (.claude/user.md §2) ────────────────────────────────────
+  | -- ユーザー管理 (doc/user.md §2) ────────────────────────────────────
     UserCreated UserId OsUid Text TenantId Role [Text]
   | UserRoleChanged UserId Role
   | UserRoleEscalationProposed

@@ -1,4 +1,4 @@
-{- | ユーザードメイン型 (.claude/user.md)
+{- | ユーザードメイン型 (doc/user.md)
 
 owlv アプリ内のユーザーマスタ。OS（AP VM）側の SSH アカウントは
 これの一方向プロジェクションであり、ここが単一の真実源 (SSoT)。
@@ -28,7 +28,7 @@ import Data.Text qualified as T
 
 import Core.Domain.Tenant (TenantId)
 
--- | OS ユーザー名そのもの。一度発行したら不変（.claude/user.md §2.1）。
+-- | OS ユーザー名そのもの。一度発行したら不変（doc/user.md §2.1）。
 newtype UserId = UserId {unUserId :: Text}
   deriving (Eq, Ord, Show)
 
@@ -82,7 +82,7 @@ instance FromJSON SshPubKey where
   parseJSON = fmap SshPubKey . parseJSON
 
 {- | command=/environment=/permitopen=/no-pty 等のオプション接頭辞を拒否する
-(.claude/user.md §2.1)。鍵タイプ (ssh-ed25519 等) で始まることのみ要求する。
+(doc/user.md §2.1)。鍵タイプ (ssh-ed25519 等) で始まることのみ要求する。
 -}
 mkSshPubKey :: Text -> Either Text SshPubKey
 mkSshPubKey t
@@ -94,7 +94,7 @@ mkSshPubKey t
   stripped = T.strip t
   knownKeyTypes = ["ssh-ed25519", "ssh-rsa", "ecdsa-sha2-", "sk-ssh-ed25519@", "ssh-dss"]
 
--- | OS UID。Core が単調増加カウンタから明示的に割り当てる (.claude/user.md §2.1)。
+-- | OS UID。Core が単調増加カウンタから明示的に割り当てる (doc/user.md §2.1)。
 newtype OsUid = OsUid {unOsUid :: Int}
   deriving (Eq, Ord, Show)
 

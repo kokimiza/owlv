@@ -56,7 +56,7 @@ module Shell.TUI.Types
   , initSubAccForm
   , initSubAccList
 
-    -- * User master (.claude/user.md)
+    -- * User master (doc/user.md)
   , UserFocus (..)
   , UserFormState (..)
   , UserListState (..)
@@ -485,12 +485,12 @@ initSubAccList mb =
     , slSelected = 0
     }
 
--- ── User master (.claude/user.md) ───────────────────────────────────────────
+-- ── User master (doc/user.md) ───────────────────────────────────────────
 
 data UserFocus = UFUsername | UFDisplayName | UFRole | UFSubmit | UFCancel
   deriving (Bounded, Enum, Eq, Ord, Show)
 
--- | 新規作成のみ（UserId は不変のため編集不可、.claude/user.md §2.1）。
+-- | 新規作成のみ（UserId は不変のため編集不可、doc/user.md §2.1）。
 data UserFormState = UserFormState
   { ufFocus :: UserFocus
   , ufUsername :: E.Editor Text Name
@@ -571,7 +571,7 @@ data AppState = AppState
   , appChan :: BChan AppEvent -- worker → brick event channel
   , appMasters :: MasterBook
   , appCatalog :: ErrorCatalog
-  , appCurrentUser :: UserId -- .claude/user.md §4.1: SSH 確立時に解決済みの actor
+  , appCurrentUser :: UserId -- doc/user.md §4.1: SSH 確立時に解決済みの actor
   , appCurrentRole :: Role -- ユーザー管理画面の表示制御（Admin のみ）に使う
   , appCurrentTenant :: TenantId -- doc/tenant_isolation.md §4.2: Identity stream のアプリ層絞り込みに使う
   }

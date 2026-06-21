@@ -85,7 +85,7 @@ data Command
     SuspendTenant UserId TenantId
   | -- | actor（対象Tenantの Active Admin）, 対象TenantId
     ArchiveTenant UserId TenantId
-  | -- ユーザー管理 (.claude/user.md §2) ────────────────────────────────────
+  | -- ユーザー管理 (doc/user.md §2) ────────────────────────────────────
 
     -- | actor, 新規UserId, 表示名, 所属Tenant（ホーム）, ロール, 画面スコープ
     CreateUser UserId UserId Text TenantId Role [Text]

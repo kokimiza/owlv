@@ -94,7 +94,7 @@ loadMasterBook store = loadProjection store appMasters
 loadJournalBook :: EventStore -> IO (Either AppError JournalBook)
 loadJournalBook store = loadProjection store appJournals
 
--- | Rebuild the UserBook read-model by replaying all events (.claude/user.md §2).
+-- | Rebuild the UserBook read-model by replaying all events (doc/user.md §2).
 loadUserBook :: EventStore -> IO (Either AppError UserBook)
 loadUserBook store = loadProjection store appUsers
 

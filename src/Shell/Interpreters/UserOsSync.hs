@@ -1,6 +1,6 @@
 {-# LANGUAGE BlockArguments #-}
 
-{- | AP VM の OS アカウントへの一方向プロジェクション (.claude/user.md §3)
+{- | AP VM の OS アカウントへの一方向プロジェクション (doc/user.md §3)
 
 owl-app から doas 経由で /usr/local/sbin/owl-user-sync (単一の許可コマンド)
 だけを呼ぶ。"スクリプトの自己申告だけで成功を確定しない" 方針のため、apply の

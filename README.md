@@ -48,12 +48,12 @@ FCIS は「純粋か副作用ありか」という1本の境界線でレイヤ�
 
 ## 機能の実装状況（2026年6月時点）
 
-「何が動いていて、何がまだ骨組みだけか」は `.claude/` 配下のどのドキュメントにも書かれていないため、ここに明記する。
+「何が動いていて、何がまだ骨組みだけか」は `doc/` 配下のどのドキュメントにも書かれていないため、ここに明記する。
 
 - **対話的な記帳・マスタ管理（TUI）**：実装済み。[src/Shell/TUI/Screen/](src/Shell/TUI/Screen/) 配下に仕訳入力・マスタ管理（組織／取引先／科目／補助科目）・伝票検索の画面がある。
 - **ドメインロジック（`decide`/`evolve`）**：28分岐。仕訳・固定資産（償却・減損・戻入・再評価・除却）・ECL・FXレート・判断ログ・従業員給付・法人税まで `Core.Command` に定義済みで、対応する property test が [test/Core/](test/Core/) に約2,000行ある。
 - **九フェーズ月次クローズ・バッチ（spec §1.2 / §4）**：`owlv-batch-center daily-close` というCLIの形は存在するが、[batch/Batch/DailyClose.hs](batch/Batch/DailyClose.hs) の実体は `pure ExitSuccess` のみで未実装（`TODO` コメントが残っている）。`wal-ship`・`vacuum-check` も同様にスタブ。
-- **本番運用基盤（OpenBSD VM・エアギャップDR・Yubikey認証等）**：[.claude/dev_sec_ops.md](.claude/dev_sec_ops.md) に設計として詳述されており、`infra/` 配下にそれに対応するプロビジョニングスクリプト・設定ファイル一式（`pf.conf`、`vmd.conf`、各 VM の `setup.sh` など）が存在する。これは設計と一致した実体のあるコードであり、アプリケーション本体とは独立した運用面のレイヤー。
+- **本番運用基盤（OpenBSD VM・エアギャップDR・Yubikey認証等）**：[doc/dev_sec_ops.md](doc/dev_sec_ops.md) に設計として詳述されており、`infra/` 配下にそれに対応するプロビジョニングスクリプト・設定ファイル一式（`pf.conf`、`vmd.conf`、各 VM の `setup.sh` など）が存在する。これは設計と一致した実体のあるコードであり、アプリケーション本体とは独立した運用面のレイヤー。
 
 ## 開発環境
 
@@ -88,7 +88,7 @@ src/Core/   純粋ドメインロジック（コマンド・イベント・decid
 src/Shell/  PostgreSQL イベントストア・effectful インタープリタ・brick TUI・ユースケース相当の orchestration
 test/Core/  ドメインロジックの property test / unit test
 infra/      本番運用基盤（OpenBSD VM・プロビジョニング・DR）のコード化された構成
-.claude/    会計仕様（ifrs_standard.md）・運用定義書（dev_sec_ops.md）・各種仕様書
+doc/    会計仕様（ifrs_standard.md）・運用定義書（dev_sec_ops.md）・各種仕様書
 ```
 
 ## ライセンス

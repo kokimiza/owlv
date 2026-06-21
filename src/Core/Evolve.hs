@@ -219,7 +219,7 @@ evolve book (TenantSuspended tid) =
   book{appTenant = adjustTenant tid (\t -> t{tenantStatus = TenantStatusSuspended}) (appTenant book)}
 evolve book (TenantArchived tid) =
   book{appTenant = adjustTenant tid (\t -> t{tenantStatus = TenantStatusArchived}) (appTenant book)}
--- ── ユーザー管理 (.claude/user.md §2) ───────────────────────────────────────
+-- ── ユーザー管理 (doc/user.md §2) ───────────────────────────────────────
 
 evolve book (UserCreated uid uidOs name homeTenant role scopes) =
   updateUsers book $ \ub ->

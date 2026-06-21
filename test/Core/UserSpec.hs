@@ -68,7 +68,7 @@ tests =
     , testGroup "Evolve" evolveTests
     ]
 
--- ── Bootstrap (.claude/user.md §2/§7) ───────────────────────────────────────
+-- ── Bootstrap (doc/user.md §2/§7) ───────────────────────────────────────
 
 bootstrapTests :: [TestTree]
 bootstrapTests =
@@ -96,7 +96,7 @@ createTests =
            other -> assertFailure ("expected DuplicateUserId, got: " <> show other)
   ]
 
--- ── Role escalation: dual control (.claude/user.md §2) ──────────────────────
+-- ── Role escalation: dual control (doc/user.md §2) ──────────────────────
 
 roleEscalationTests :: [TestTree]
 roleEscalationTests =
@@ -126,7 +126,7 @@ roleEscalationTests =
          in decide book1 (ApproveRoleEscalation admin2 alice) @?= Right [UserRoleChanged alice Admin]
      ]
 
--- ── Lifecycle: Suspend/Reactivate/Remove (.claude/user.md §2.1) ──────────────
+-- ── Lifecycle: Suspend/Reactivate/Remove (doc/user.md §2.1) ──────────────
 
 lifecycleTests :: [TestTree]
 lifecycleTests =
@@ -144,7 +144,7 @@ lifecycleTests =
            other -> assertFailure ("expected UserNotFound, got: " <> show other)
      ]
 
--- ── SSH 公開鍵 (.claude/user.md §2.1: オプション禁止・鍵共有禁止) ──────────────
+-- ── SSH 公開鍵 (doc/user.md §2.1: オプション禁止・鍵共有禁止) ──────────────
 
 sshKeyTests :: [TestTree]
 sshKeyTests =
@@ -169,7 +169,7 @@ sshKeyTests =
               other -> assertFailure ("expected DuplicateSshPubKey, got: " <> show other)
      ]
 
--- ── 自己管理操作: 本人または Admin (.claude/user.md §2.2) ────────────────────
+-- ── 自己管理操作: 本人または Admin (doc/user.md §2.2) ────────────────────
 
 selfOrAdminTests :: [TestTree]
 selfOrAdminTests =
@@ -192,7 +192,7 @@ selfOrAdminTests =
            @?= Right [UserPasswordChanged alice "hash"]
      ]
 
--- ── 画面スコープ (.claude/user.md §2) ────────────────────────────────────────
+-- ── 画面スコープ (doc/user.md §2) ────────────────────────────────────────
 
 scopeTests :: [TestTree]
 scopeTests =
@@ -211,7 +211,7 @@ scopeTests =
            other -> assertFailure ("expected UserScopeNotFound, got: " <> show other)
      ]
 
--- ── evolve の状態機械 (.claude/user.md §2.1: Active は同期成功でのみ到達) ────
+-- ── evolve の状態機械 (doc/user.md §2.1: Active は同期成功でのみ到達) ────
 
 evolveTests :: [TestTree]
 evolveTests =
