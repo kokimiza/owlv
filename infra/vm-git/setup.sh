@@ -103,6 +103,8 @@ cat >"${FORGEJO_DATA}/custom/conf/app.ini" <<EOF
 APP_NAME = owlv Git
 RUN_USER = git
 RUN_MODE = prod
+WORK_PATH     = ${FORGEJO_DATA}
+APP_DATA_PATH = ${FORGEJO_DATA}/data
 
 [server]
 PROTOCOL         = http
@@ -118,6 +120,12 @@ PATH     = ${FORGEJO_DATA}/forgejo.db
 
 [repository]
 ROOT = ${FORGEJO_DATA}/repositories
+
+[git]
+# OpenBSD には bash が標準で存在しないため、git フック用スクリプトの
+# シェルを ksh に固定する (git ユーザーのログインシェルと一致させる。
+# 既定値 bash は SCRIPT_TYPE 警告の原因)
+SCRIPT_TYPE = ksh
 
 [security]
 INSTALL_LOCK         = true
