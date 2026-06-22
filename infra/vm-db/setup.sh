@@ -28,6 +28,10 @@ DB_REPL_USER="${DB_REPL_USER:-owl_repl}"
 # owl_platform_admin（root_admin_username 経由のブートストラップ管理者専用）に分離する。
 DB_MIGRATOR_USER="${DB_MIGRATOR_USER:-owl_migrator}"
 DB_PLATFORM_ADMIN_USER="${DB_PLATFORM_ADMIN_USER:-owl_platform_admin}"
+# doc/cqrs.md §4.3, §8: owlv-projector 専用ロール。SELECT のみ (INSERT 不可) で
+# owl_app とは別の認証情報を使うことで、プロジェクターが乗っ取られても
+# events を書き換え/偽造できないことを Postgres 側の権限分離として保証する。
+DB_PROJECTOR_USER="${DB_PROJECTOR_USER:-owl_projector}"
 
 _log "DB VM セットアップ開始 (${OWL_DB_IP})"
 
@@ -167,6 +171,12 @@ su -m _postgresql -c "psql -c \"\
         ENCRYPTED PASSWORD 'changeme_platform_admin_password';\"" 2>/dev/null ||
 	_info "${DB_PLATFORM_ADMIN_USER} は既に存在します"
 
+# owlv-projector (doc/cqrs.md) 専用。SELECT のみ — INSERT 権限を一切持たない。
+su -m _postgresql -c "psql -c \"\
+    CREATE USER ${DB_PROJECTOR_USER} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS \
+        ENCRYPTED PASSWORD 'changeme_projector_password';\"" 2>/dev/null ||
+	_info "${DB_PROJECTOR_USER} は既に存在します"
+
 su -m _postgresql -c "createdb -O ${DB_MIGRATOR_USER} ${DB_NAME} 2>/dev/null" ||
 	_info "${DB_NAME} は既に存在します"
 
@@ -185,6 +195,7 @@ echo "      psql -U postgres -c \"ALTER USER ${DB_APP_USER} PASSWORD '<strong-pa
 echo "      psql -U postgres -c \"ALTER USER ${DB_REPL_USER} PASSWORD '<strong-pass>';\""
 echo "      psql -U postgres -c \"ALTER USER ${DB_MIGRATOR_USER} PASSWORD '<strong-pass>';\""
 echo "      psql -U postgres -c \"ALTER USER ${DB_PLATFORM_ADMIN_USER} PASSWORD '<strong-pass>';\""
+echo "      psql -U postgres -c \"ALTER USER ${DB_PROJECTOR_USER} PASSWORD '<strong-pass>';\""
 echo "   2. 本番 TLS 証明書に差し替え: ${PGDATA}/server.{key,crt}"
 echo "   3. owlv スキーマ・RLS ポリシーを適用（owl_app ではなく owl_migrator で実行すること。"
 echo "      所有者でないと RLS が機能しない — doc/tenant_isolation.md §6.4）:"

@@ -215,17 +215,29 @@ cmd_deploy() {
 
 	OWNER="owl"
 	REPO="owlv"
-	ASSET="owlv-openbsd-amd64"
-	PKG_URL="http://${GIT_IP}:3000/${OWNER}/${REPO}/releases/download/${TAG}/${ASSET}"
 
-	# AP VM にバイナリをダウンロードして入れ替え (アトミック mv)
+	# AP VM にバイナリをダウンロードして入れ替え (アトミック mv)。owlv-app /
+	# owlv-batch-center / owlv-projector の3バイナリを同一タグから一括デプロイし、
+	# デプロイ経路を1本に統一する (旧来 owlv-batch-center は cron_batch.md §8 の
+	# signify検証版 owlv-deploy-batch が想定されていたが、CIの署名生成パイプライン
+	# 自体がまだ存在しないため、署名検証だけ実装しても検証対象が無く意味がない。
+	# CI署名パイプライン整備後に両立/置き換えを再検討すること)。
+	# owlv-app は owl-session 経由の per-SSH 起動 (rc.d サービスではない) なので
+	# rcctl restart owlv は対象サービスが無く無害に失敗する (2>/dev/null || true)。
+	# owlv-batch-center は cron 起動のみで常駐しないため再起動は不要。
+	# owlv-projector は rcctl 管理の常駐デーモン (doc/cqrs.md) なので実際に再起動が効く。
 	_info "AP VM (${AP_IP}) にデプロイ"
 	_ssh "root@${AP_IP}" "
         set -e
-        ftp -o /tmp/owlv-new '${PKG_URL}'
-        chmod 755 /tmp/owlv-new
-        mv /tmp/owlv-new /usr/local/bin/owlv-app
+        ftp -o /tmp/owlv-app-new           'http://${GIT_IP}:3000/${OWNER}/${REPO}/releases/download/${TAG}/owlv-app-openbsd-amd64'
+        ftp -o /tmp/owlv-batch-center-new  'http://${GIT_IP}:3000/${OWNER}/${REPO}/releases/download/${TAG}/owlv-batch-center-openbsd-amd64'
+        ftp -o /tmp/owlv-projector-new     'http://${GIT_IP}:3000/${OWNER}/${REPO}/releases/download/${TAG}/owlv-projector-openbsd-amd64'
+        chmod 755 /tmp/owlv-app-new /tmp/owlv-batch-center-new /tmp/owlv-projector-new
+        mv /tmp/owlv-app-new /usr/local/bin/owlv-app
+        mv /tmp/owlv-batch-center-new /usr/local/bin/owlv-batch-center
+        mv /tmp/owlv-projector-new /usr/local/bin/owlv-projector
         rcctl restart owlv 2>/dev/null || true
+        rcctl restart owlv_projector
     "
 
 	_log "デプロイ完了: ${TAG}"

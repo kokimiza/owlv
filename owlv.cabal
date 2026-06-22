@@ -173,7 +173,6 @@ test-suite owlv-test
         Core.TenantSpec
     build-depends:
         owlv,
-        effectful        >= 2.3,
         tasty            >= 1.4,
         tasty-quickcheck >= 0.10,
         tasty-hunit      >= 0.10,

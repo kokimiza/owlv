@@ -254,9 +254,11 @@ exit "$rc"
 
 ## 8. バイナリデプロイとアトミック切替
 
-owlv-batch-center は owlv 本体と同じデプロイレールに乗る。`scp` は使わない。Rev.2 §1.1.1 のピンホールは Git VM(registry.owl.internal)の HTTPS(443) のみ。OpenBSD base の `ftp(1)` が http/https を喋るため ports 追加なしで使える（`fetch(1)` は FreeBSD のコマンドで OpenBSD に存在しない）。
+owlv-batch-center は owlv-app / owlv-projector と同じデプロイレールに統一されている: ホストの [owl-control.sh](../infra/host/sbin/owl-control.sh) `cmd_deploy <tag>` が3バイナリを一括で Forgejo (Git VM, `http://<git_vm>:3000/...`) から取得し、AP VM へ `mv` でアトミック切替する。AP VM → Git VM:3000 は [host/conf/pf.conf](../infra/host/conf/pf.conf) の恒久ルール（git_vm は内部固定IPのみが宛先のため、DR射出のような外部宛先と違い時限ピンホール化は不要と判断）。
 
-### ビルドサーバ側: 署名と manifest の生成形式を固定する
+以前は本セクションで `owlv-deploy-batch`（AP VM 自身が registry.owl.internal から HTTPS+signify 三重検証で取得する、より強固な方式）を想定していたが、**実装されたことは一度もない** —— CI の署名生成パイプライン（`.forgejo/workflows/build.yml` 自体が未整備）が無い状態で検証側だけ作っても検証対象の署名済みアーティファクトが存在せず、機能しない。以下は CI 署名パイプライン整備後に検討する**将来の強化案**として保持する（現状の実装は上記の `owl-control.sh cmd_deploy` の素朴な fetch+mv のみで、signify 検証は無い）。
+
+### 将来案: ビルドサーバ側 — 署名と manifest の生成形式を固定する
 
 ```sh
 # ビルドサーバで実行
@@ -273,7 +275,7 @@ signify -S -s /etc/owlv/signing.sec -m SHA256 -x SHA256.sig
 
 `signing.sec` はビルドサーバ上でパスフレーズ保護し、アクセスを厳格に制限する。AP VM には公開鍵(`signing.pub`)のみを置く。
 
-### AP VM 側: デプロイスクリプト
+### 将来案: AP VM 側 — デプロイスクリプト
 
 ```sh
 #!/bin/sh
@@ -351,19 +353,21 @@ echo "Deploy OK: $BINARY  sha256=$ACTUAL  uname=$BUILT_UNAME"
 - crontab のスケジュール行(OS スケジューラなので置き換えない)
 - `owlv-run-batch` ラッパー(`lockf` + ログリダイレクトの起動定型のみ)
 - `newsyslog.conf`(ファイルローテーションはシステムに任せる)
-- `owlv-deploy-batch`(バイナリ自身がデプロイできないため、最小限の sh)
+- `owl-control.sh cmd_deploy`(バイナリ自身がデプロイできないため、最小限の sh。
+  §8 の signify版 `owlv-deploy-batch` を将来実装する場合もここに該当する)
 
 ---
 
 ## 付録: セットアップ順序チェックリスト
 
 1. `groupadd` / `useradd` / ディレクトリ作成(前提)
-2. 内部 PKI 整備(§1)— **これを最初にやらないと §2/§8 が全部落ちる**
+2. 内部 PKI 整備(§1)— **これを最初にやらないと §2 が全部落ちる**
 3. `.pgpass` 配置・パーミッション 600(§2)
 4. `owlv-run-batch` 設置(§4)
 5. `lockf` 失敗コードを実測し §6 の表を確定(§6)
 6. `/etc/crontab` 投入・1 行検証(§3, §5)
 7. `newsyslog.conf` 追記(§7)
-8. signify 鍵ペア生成・公開鍵を AP VM に設置、`owlv-deploy-batch` 設置(§8)
+8. 初回デプロイ: ホストから `doas owl-control.sh deploy vX.Y.Z`(§8。
+   owlv-app/owlv-batch-center/owlv-projector を一括取得)
 9. syslogd の `daemon.err` 以上の振り分けと監視結線(§6)
 10. 予備機で初回デプロイ → 全バッチの手動実行 → 終了コードと syslog 到達を確認

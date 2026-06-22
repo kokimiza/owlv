@@ -100,3 +100,11 @@ ALTER ROLE owl_app NOBYPASSRLS;
 -- owl_platform_admin: root_admin_username のブートストラップのみが使う。
 GRANT SELECT ON tenants TO owl_platform_admin;
 ALTER ROLE owl_platform_admin NOBYPASSRLS;
+
+-- owl_projector (doc/cqrs.md §4.3, §8): owlv-projector 専用。SELECT のみ。
+-- owl_app と認証情報を共有しないため、プロジェクターが乗っ取られても
+-- events を書き換え/偽造することは一切できない (INSERT 権限が無い)。
+-- listActiveTenantIds と同じ最小権限の列指定 (name/kind等は渡さない)。
+GRANT SELECT ON events TO owl_projector;
+GRANT SELECT (tenant_id, status) ON tenants TO owl_projector;
+ALTER ROLE owl_projector NOBYPASSRLS;

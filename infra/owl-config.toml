@@ -60,6 +60,10 @@ db_repl_user = "owl_repl"
 # doc/tenant_isolation.md §6.4: owl_app をテーブル所有者にしないためのロール分離。
 db_migrator_user = "owl_migrator"
 db_platform_admin_user = "owl_platform_admin"
+# doc/cqrs.md §4.3, §8: owlv-projector 専用。SELECT のみで owl_app の認証情報は
+# 共有しない (プロジェクターが乗っ取られても events を書き換え/偽造できないことを
+# Postgres側の権限分離として実際に保証する)。
+db_projector_user = "owl_projector"
 pg_version = "18"
 
 [user]
