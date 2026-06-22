@@ -88,6 +88,7 @@ if [ ! -f "$FORGEJO_BIN" ] || [ ! -d "$FORGEJO_STATIC_ROOT/options" ]; then
 	export GOCACHE=/usr/local/go-workspace/cache
 	install -d "$GOPATH" "$GOCACHE"
 
+	_info "Forgejo 本体は Go の依存取得+ビルドが大きく、15〜30分程度かかることがあります。"
 	(cd "$FORGEJO_SRC" &&
 		go build -tags 'sqlite sqlite_unlock_notify' -o "$FORGEJO_BIN" .) ||
 		_die "Forgejo のビルドに失敗しました"
@@ -217,8 +218,15 @@ su -m git -c "forgejo admin user create \
 	--email admin@localhost \
 	--admin \
 	--must-change-password \
-	--config ${FORGEJO_DATA}/custom/conf/app.ini" ||
-	_info "管理者ユーザーは既存のためスキップ"
+	--config ${FORGEJO_DATA}/custom/conf/app.ini" 2>&1 | while read -r l; do _info "$l"; done
+# create の失敗理由が「既に存在」かどうかをエラー文字列で判定すると、
+# repo create の一件 (実在しないサブコマンドを `||` で握り潰し続行していた)
+# と同じ事故になる。実際に発生: create が何らかの理由で失敗し `||` で
+# スキップしたのに admin が存在せず、後続の generate-access-token が
+# "user does not exist [uid: 0, name: admin]" で失敗。終了コードではなく
+# 実在そのものを確認してから先に進む。
+su -m git -c "forgejo admin user list --config ${FORGEJO_DATA}/custom/conf/app.ini" |
+	grep -qw admin || _die "admin ユーザーが存在しません (作成に失敗した可能性。上記ログを確認してください)"
 _ok "管理者ユーザー"
 
 # オフライン Runner 登録: ネットワークハンドシェイク不要、共有シークレットのみ使用

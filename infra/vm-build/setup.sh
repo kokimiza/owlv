@@ -31,6 +31,7 @@ _log "Build VM セットアップ開始 (${OWL_BUILD_IP})"
 
 # ── パッケージ (GHC / cabal / 依存) ─────────────────────
 _log "GHC (>= ${GHC_MIN_VERSION}) および開発ツールをインストール"
+_info "GHC は数百MB規模のため、VM間NAT経由だと20〜40分以上かかることがあります。"
 # GHC は ports から (バイナリパッケージとして提供)
 pkg_add ghc cabal-install git curl ||
 	_die "GHC のインストールに失敗しました。上記 pkg_add の出力を確認してください"
@@ -71,6 +72,7 @@ pkg_add sqlite3 2>/dev/null ||
 # 違い、hlint 自体は owlv のビルドキャッシュと共存させて再ビルドを避ける)。
 if ! command -v hlint >/dev/null 2>&1; then
 	_log "HLint をインストール"
+	_info "依存パッケージを多数ソースからビルドするため 10〜20分程度かかることがあります。"
 	cabal install hlint --install-method=copy --installdir=/usr/local/bin --overwrite-policy=always ||
 		_die "HLint のインストールに失敗しました"
 	_ok "HLint: $(hlint --version 2>/dev/null | head -1)"
@@ -141,6 +143,7 @@ if [ ! -f "$RUNNER_BIN" ]; then
 	export GOCACHE=/usr/local/go-workspace/cache
 	install -d "$GOPATH" "$GOCACHE"
 
+	_info "Go の依存取得+ビルドのため 5〜15分程度かかることがあります。"
 	(cd "$RUNNER_SRC" && go build -o "$RUNNER_BIN" .) ||
 		_die "Forgejo Runner のビルドに失敗しました"
 

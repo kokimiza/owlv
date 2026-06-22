@@ -64,20 +64,30 @@ _vm_provision() {
 	ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
 		"echo 'https://cdn.openbsd.org/pub/OpenBSD' > /etc/installurl"
 
-	# setup.sh を実行
-	# 標準出力は tee /dev/stderr でリアルタイム表示しつつ変数にも捕捉する。
-	# vm-git/setup.sh は最後に "DEPLOY_POLL_TOKEN=<token>" を1行出力するため
-	# (doc/dev_sec_ops.md §4.2)、ここで捕まえてホスト側ファイルへ書き込む。
+	# setup.sh を実行。
+	# vm-git だけは最後に "DEPLOY_POLL_TOKEN=<token>" を1行出力するため
+	# (doc/dev_sec_ops.md §4.2)、その出力を tee /dev/stderr で複製しつつ変数に
+	# 捕捉する必要がある。他の VM (特に vm-build の pkg_add / go build) は
+	# パイプを挟まない素の ssh のままにする — パイプ越しだと進捗メーター
+	# (\r で行を上書きする表示) が tee 側のフルバッファリングに引っかかり、
+	# 長時間無音に見える事故になる (実際に発生: pkg_add が無音のまま
+	# 20分以上経過したように見えたが、実際は出力が溜まっていただけだった)。
 	_log "[${vmname}] setup.sh を実行中..."
-	SETUP_OUTPUT=$(ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
-		"OWL_AP_IP='${OWL_AP_IP}' OWL_DB_IP='${OWL_DB_IP}' \
+	SETUP_CMD="OWL_AP_IP='${OWL_AP_IP}' OWL_DB_IP='${OWL_DB_IP}' \
          OWL_GIT_IP='${OWL_GIT_IP}' OWL_BUILD_IP='${OWL_BUILD_IP}' \
          OWL_RELEASE='${OWL_RELEASE}' GHC_VERSION='${GHC_VERSION}' \
          PG_VERSION='${PG_VERSION}' FORGEJO_VERSION='${FORGEJO_VER}' \
          FORGEJO_RUNNER_VERSION='${FORGEJO_RUNNER_VER}' \
          FORGEJO_RUNNER_SECRET='${FORGEJO_RUNNER_SECRET}' \
          OWLV_ROOT_ADMIN_USERNAME='${OWLV_ROOT_ADMIN_USERNAME}' \
-         sh /provision/${vmname}/setup.sh" 2>&1 | tee /dev/stderr)
+         sh /provision/${vmname}/setup.sh"
+	if [ "$vmname" = "vm-git" ]; then
+		SETUP_OUTPUT=$(ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+			"root@${vmip}" "$SETUP_CMD" 2>&1 | tee /dev/stderr)
+	else
+		ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+			"root@${vmip}" "$SETUP_CMD"
+	fi
 	_log "[${vmname}] setup.sh 完了"
 
 	if [ "$vmname" = "vm-git" ]; then
