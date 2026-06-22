@@ -27,6 +27,15 @@ FORGEJO_RUNNER_SECRET="${FORGEJO_RUNNER_SECRET:?FORGEJO_RUNNER_SECRET is require
 GHC_MIN_VERSION="${GHC_VERSION:-9.10}"
 FORGEJO_RUNNER_VERSION="${FORGEJO_RUNNER_VERSION:-12.11.1}"
 
+# GHC のテキスト I/O はプロセスのロケールでエンコーディングを決める。LANG 未設定
+# (C/POSIX = ASCII 限定) のままだと、GHC 自身のソースに含まれる非ASCII文字
+# (em dash 等) を happy/alex が読めず "hGetContents: invalid argument (cannot
+# decode byte sequence starting from 226)" で失敗する (実際に発生: hlint が
+# 依存する ghc-lib-parser のビルド中、compiler/GHC/Parser.y の読み込みで発生)。
+# cabal/ghc を呼ぶ全工程に効かせるため、できるだけ早い段階で設定する。
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+
 _log "Build VM セットアップ開始 (${OWL_BUILD_IP})"
 
 # ── パッケージ (GHC / cabal / 依存) ─────────────────────
@@ -177,6 +186,11 @@ runner:
   capacity: 2
   envs:
     CABAL_DIR: /var/forgejo-runner/.cabal
+    # GHC/happy/alex の非ASCII文字読み込み対策 (このファイル冒頭のコメント参照)。
+    # CI ジョブ (build.yml) も cabal build / hlint を実行するため、provisioning
+    # 時の setup.sh だけでなくここにも設定しておく必要がある。
+    LANG: en_US.UTF-8
+    LC_ALL: en_US.UTF-8
   timeout: 3h
   insecure: false
   fetch_timeout: 5s
