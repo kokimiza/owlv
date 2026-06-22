@@ -68,25 +68,25 @@
 #   # (1) infra を /tmp/infra/ に同期 (初回以降は sets/ は除外)
 #   rsync -av --progress --exclude='sets/' infra/ <YOUR_USERNAME>@192.168.50.200:/tmp/infra/
 #
-#   # (2) SSH ログイン後、/etc/owl/infra/ に配置して実行
+#   # (2) SSH ログイン後、/etc/owlv/infra/ に配置して実行
 #   ssh <YOUR_USERNAME>@192.168.50.200
-#   doas rm -rf /etc/owl/infra/ && doas cp -r /tmp/infra/ /etc/owl/infra/
-#   doas sh /etc/owl/infra/provision.sh
+#   doas rm -rf /etc/owlv/infra/ && doas cp -r /tmp/infra/ /etc/owlv/infra/
+#   doas sh /etc/owlv/infra/provision.sh
 #
-#   ※ 重要: 削除対象は必ず /etc/owl/infra/ に限定すること。/etc/owl/ 直下には
+#   ※ 重要: 削除対象は必ず /etc/owlv/infra/ に限定すること。/etc/owlv/ 直下には
 #     provision.sh が生成する SSH 鍵・known_hosts・改ざん検知ベースラインが
-#     置かれている。"doas rm -rf /etc/owl/" のように infra/ より上を消すと、
+#     置かれている。"doas rm -rf /etc/owlv/" のように infra/ より上を消すと、
 #     再デプロイのたびにこれらが全損する (過去に実際に発生した事故)。
 #
 #   ※ 再実行時は rsync だけ打てば差分だけ転送される。
 #
-#   ※ SSH が途中で切れた場合、再ログイン後は同じコマンド (doas sh /etc/owl/infra/provision.sh)
+#   ※ SSH が途中で切れた場合、再ログイン後は同じコマンド (doas sh /etc/owlv/infra/provision.sh)
 #     を打つだけでよい。各 STEP は実体 (ファイル・SSH 到達性・完了マーカー) を見て
 #     既に完了した分をスキップするため、未完了の STEP から自動的に再開する。
 #
 # ━━━ 【Yubikey が届いたら】━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #
-#   ssh <YOUR_USERNAME>@<HOST_IP> 'doas sh /etc/owl/infra/host/security/yubikey-setup.sh'
+#   ssh <YOUR_USERNAME>@<HOST_IP> 'doas sh /etc/owlv/infra/host/security/yubikey-setup.sh'
 #
 # この時点では SSH を維持する。
 # Yubikey セットアップ完了まで管理者がロックアウトされないようにするため。
@@ -104,7 +104,7 @@ _on_exit() {
 		echo ""
 		echo "エラー終了 (exit $rc)。PF ルールを安全な暫定状態に維持します。"
 		echo "ログ: ${LOGFILE:-'(未設定)'}"
-		echo "再実行: sh /etc/owl/infra/provision.sh"
+		echo "再実行: sh /etc/owlv/infra/provision.sh"
 	else
 		printf '[%s] プロビジョニング正常終了\n' "$(date '+%Y-%m-%d %H:%M:%S')"
 	fi
@@ -218,7 +218,7 @@ _vm_state_for() {
 # OpenBSD /bin/sh (pdksh 派生) はプロセス置換 >(cmd) 未サポート。
 # named pipe + バックグラウンド tee で端末とファイルに同時出力する。
 mkdir -p /var/log/owl
-LOGFILE="/var/log/owl/provision-$(date +%Y%m%d-%H%M%S).log"
+LOGFILE="/var/log/owlv/provision-$(date +%Y%m%d-%H%M%S).log"
 _LOGPIPE="/tmp/owl-prov-$$.pipe"
 mkfifo -m 600 "$_LOGPIPE"
 tee -a "$LOGFILE" <"$_LOGPIPE" &
@@ -272,8 +272,8 @@ _log "  GHC=${GHC_VERSION}  PG=${PG_VERSION}  Forgejo=${FORGEJO_VER}  Runner=${F
 LOGDIR=/var/log/owl
 HOST_INT_IP="10.0.1.1"
 HOST_DEV_IP="10.0.2.1"
-PROV_KEY=/etc/owl/prov_ed25519     # プロビジョニング用の使い捨て SSH 鍵
-BACKUP_KEY=/etc/owl/backup_ed25519 # DR 用の恒久 SSH 鍵 (owl-control.sh が使用)
+PROV_KEY=/etc/owlv/prov_ed25519     # プロビジョニング用の使い捨て SSH 鍵
+BACKUP_KEY=/etc/owlv/backup_ed25519 # DR 用の恒久 SSH 鍵 (owl-control.sh が使用)
 
 # Runner 登録シークレット: git_vm と build_vm で共有する (Web UI 不要のオフライン登録)
 # § 4.1: forgejo forgejo-cli actions register / forgejo-runner create-runner-file
@@ -312,7 +312,7 @@ echo " プロビジョニング完了 ✓"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo " 【残作業】host/security/ の手順を順番に実行してください。"
-echo " いずれもこの SSH セッションから直接実行可能 (sh /etc/owl/infra/host/security/<script>):"
+echo " いずれもこの SSH セッションから直接実行可能 (sh /etc/owlv/infra/host/security/<script>):"
 echo ""
 echo "   1. ap-admin-user.sh      vm-ap に ${OWLV_ROOT_ADMIN_USERNAME:-<root_admin_username>} の"
 echo "                            OS アカウントを作成 (owlv の初回 Admin 自動生成に必要)"

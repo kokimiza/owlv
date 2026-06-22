@@ -2,8 +2,8 @@
 # undo-provision.sh — provision.sh の変更を巻き戻す緊急リセットスクリプト
 #
 # 【使い方】
-#   doas sh /etc/owl/infra/undo-provision.sh          # VM ディスクは残す (デフォルト)
-#   doas sh /etc/owl/infra/undo-provision.sh --wipe   # VM ディスクイメージも削除
+#   doas sh /etc/owlv/infra/undo-provision.sh          # VM ディスクは残す (デフォルト)
+#   doas sh /etc/owlv/infra/undo-provision.sh --wipe   # VM ディスクイメージも削除
 #
 # 【注意】
 #   - VM の中身 (PostgreSQL データ等) は復元できない。DB バックアップを先に確保すること。
@@ -135,8 +135,8 @@ _ok "一時ファイル削除"
 
 # ── STEP 6: SSH 鍵 ──────────────────────────────────────────
 _log "STEP 6: SSH 鍵を削除"
-for key in /etc/owl/prov_ed25519 /etc/owl/prov_ed25519.pub \
-	/etc/owl/backup_ed25519 /etc/owl/backup_ed25519.pub; do
+for key in /etc/owlv/prov_ed25519 /etc/owlv/prov_ed25519.pub \
+	/etc/owlv/backup_ed25519 /etc/owlv/backup_ed25519.pub; do
 	rm -f "$key" && _ok "削除: $key" || _skip "$key"
 done
 
@@ -157,9 +157,9 @@ for f in \
 	/usr/local/sbin/owl-control.sh \
 	/usr/local/sbin/owl-integrity-check.sh \
 	/usr/local/sbin/owl-pfctl-pinhole \
-	/etc/owl/known_hosts \
-	/etc/owl/integrity-baseline.sha256 \
-	/etc/owl/INTEGRITY_HOLD; do
+	/etc/owlv/known_hosts \
+	/etc/owlv/integrity-baseline.sha256 \
+	/etc/owlv/INTEGRITY_HOLD; do
 	rm -f "$f" && _ok "削除: $f" || _skip "$f"
 done
 
@@ -246,6 +246,6 @@ echo " 現在の doas: wheel グループのみ permit"
 echo ""
 if [ "$WIPE_DISKS" -eq 0 ]; then
 	echo " VM ディスクは /var/vmm/ に残っています。"
-	echo " 完全に消す場合: doas sh /etc/owl/infra/undo-provision.sh --wipe"
+	echo " 完全に消す場合: doas sh /etc/owlv/infra/undo-provision.sh --wipe"
 fi
-echo " 再プロビジョニング: doas sh /etc/owl/infra/provision.sh"
+echo " 再プロビジョニング: doas sh /etc/owlv/infra/provision.sh"

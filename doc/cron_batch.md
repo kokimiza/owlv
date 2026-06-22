@@ -6,8 +6,8 @@
 |---|---|
 | バイナリ配置 | `/usr/local/bin/owlv-batch-center` |
 | 実行ユーザー | `_owlbatch`(専用サービスアカウント、UID 800) |
-| ログディレクトリ | `/var/log/owl/` |
-| ロックファイル置場 | `/var/run/owl/` |
+| ログディレクトリ | `/var/log/owlv/` |
+| ロックファイル置場 | `/var/run/owlv/` |
 | PG 接続 | libpq 環境変数 + `.pgpass` + TLS(verify-full) |
 | バッチ実行 VM | AP VM(PG は DB VM、レジストリは Git VM に分離) |
 | 信頼の根 | 内部 CA(PG / レジストリ共通) + signify 公開鍵 |
@@ -119,8 +119,8 @@ case "$CMD" in
   *) echo "owlv-run-batch: unknown command: $CMD" >&2; exit 64 ;;
 esac
 
-LOCKFILE="/var/run/owl/${CMD}.lock"
-LOGFILE="/var/log/owl/${CMD}.log"
+LOCKFILE="/var/run/owlv/${CMD}.lock"
+LOGFILE="/var/log/owlv/${CMD}.log"
 
 # exec で wrap するので、ロック取得後の終了コードは owlv-batch-center の値が
 # そのまま cron へ届く。パイプは一切噛まない(§6 参照)。
@@ -237,9 +237,9 @@ exit "$rc"
 
 ```
 # logfile                          owner:group      mode  count  size(KB)  when    flags
-/var/log/owl/daily-close.log      _owlbatch:wheel   640    7      4096    @T0230   CZ
-/var/log/owl/wal-ship.log         _owlbatch:wheel   640   14      1024    $W0      CZ
-/var/log/owl/vacuum-check.log     _owlbatch:wheel   640   14       512    $D0      CZ
+/var/log/owlv/daily-close.log      _owlbatch:wheel   640    7      4096    @T0230   CZ
+/var/log/owlv/wal-ship.log         _owlbatch:wheel   640   14      1024    $W0      CZ
+/var/log/owlv/vacuum-check.log     _owlbatch:wheel   640   14       512    $D0      CZ
 ```
 
 | フラグ | 意味 |

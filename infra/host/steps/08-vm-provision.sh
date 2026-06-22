@@ -17,8 +17,8 @@ _vm_provision() {
 
 	# VM のホスト鍵を known_hosts に記録する (owl-control.sh で StrictHostKeyChecking=yes に使用)
 	_log "[${vmname}] ホスト鍵を ssh-keyscan で取得..."
-	ssh-keyscan -T 10 "$vmip" >>/etc/owl/known_hosts 2>/dev/null
-	_info "    ホスト鍵を /etc/owl/known_hosts に記録"
+	ssh-keyscan -T 10 "$vmip" >>/etc/owlv/known_hosts 2>/dev/null
+	_info "    ホスト鍵を /etc/owlv/known_hosts に記録"
 
 	# スクリプトと設定ファイルを VM に転送
 	_log "[${vmname}] /provision ディレクトリを作成..."

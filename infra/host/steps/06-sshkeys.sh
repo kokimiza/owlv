@@ -65,7 +65,7 @@ _log "dhcpd PID: $(pgrep -x dhcpd || echo '不明')"
 # httpd は /var/www に chroot するため root は chroot 内のパスで指定する
 install -d /var/www/htdocs
 # OpenBSD に nullfs がないため sets をコピーする (07-lockdown.sh で rm -rf)
-[ -d "${SELF}/sets" ] || _die "インストールセットが見つかりません: ${SELF}/sets\n  事前に scp -r infra/sets <host>:/etc/owl/infra/ してください"
+[ -d "${SELF}/sets" ] || _die "インストールセットが見つかりません: ${SELF}/sets\n  事前に scp -r infra/sets <host>:/etc/owlv/infra/ してください"
 [ -f "${SELF}/sets/bsd.rd" ] || _die "bsd.rd が見つかりません: ${SELF}/sets/bsd.rd"
 [ -f "${SELF}/sets/BUILDINFO" ] || _die "BUILDINFO が見つかりません: ${SELF}/sets/BUILDINFO\n  取得方法: ftp https://cdn.openbsd.org/pub/OpenBSD/7.9/amd64/BUILDINFO"
 install -d /var/www/htdocs/sets

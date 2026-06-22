@@ -33,8 +33,8 @@ _ok "本番 PF 適用 (NAT 解除・封鎖)"
 # 改ざん検知ベースライン記録 (§5)
 _log "改ざん検知ベースラインを計算中..."
 find /etc /usr/local/sbin -type f 2>/dev/null | sort |
-	xargs sha256 >/etc/owl/integrity-baseline.sha256
-_log "ベースライン: $(wc -l </etc/owl/integrity-baseline.sha256) ファイルを記録"
+	xargs sha256 >/etc/owlv/integrity-baseline.sha256
+_log "ベースライン: $(wc -l </etc/owlv/integrity-baseline.sha256) ファイルを記録"
 _ok "改ざん検知ベースライン記録"
 
 # age 受信者公開鍵の確認

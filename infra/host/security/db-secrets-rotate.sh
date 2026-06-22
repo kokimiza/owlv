@@ -5,7 +5,7 @@
 # (changeme_*) を設定する (DB が外部から到達不能な内部 LAN にある間の
 # 一時値)。本番運用前に強パスワードへ差し替え、AP VM の db.env にも
 # 反映する必要があるが、これを provision.sh に組み込むと:
-#   - パスワードがログ (/var/log/owl/provision-*.log) に残ってしまう
+#   - パスワードがログ (/var/log/owlv/provision-*.log) に残ってしまう
 #   - VM 起動直後 (まだ疎通確認中) にやる処理ではない
 # ので host/security/ に分離している。
 #
@@ -18,10 +18,10 @@
 #     スキップしてその旨を表示する
 set -eu
 
-CONFIG=/etc/owl/infra/owl-config.toml
-KNOWN_HOSTS=/etc/owl/known_hosts
-BACKUP_KEY=/etc/owl/backup_ed25519
-INFRA_ROOT=/etc/owl/infra
+CONFIG=/etc/owlv/infra/owl-config.toml
+KNOWN_HOSTS=/etc/owlv/known_hosts
+BACKUP_KEY=/etc/owlv/backup_ed25519
+INFRA_ROOT=/etc/owlv/infra
 
 _log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 _die() {
@@ -117,9 +117,9 @@ TMP_CRT=$(mktemp /tmp/owl-db-ca.XXXXXX.crt)
 trap 'rm -f "$TMP_CRT"' EXIT
 _scp_from_db "/var/postgresql/data/server.crt" "$TMP_CRT" ||
 	_die "server.crt の取得に失敗しました"
-_scp_to_ap "$TMP_CRT" "/etc/owl/db-ca.crt" ||
+_scp_to_ap "$TMP_CRT" "/etc/owlv/db-ca.crt" ||
 	_die "db-ca.crt の配置に失敗しました"
-_ssh_ap "chmod 644 /etc/owl/db-ca.crt"
+_ssh_ap "chmod 644 /etc/owlv/db-ca.crt"
 _ok "db-ca.crt 配置完了 (自己署名証明書。本番 CA 証明書に差し替えるまでの暫定値)"
 
 # AP VM の db.env を実値で生成。PGUSER/PGPASSWORD/PGDATABASE は標準 libpq 変数名
@@ -127,38 +127,38 @@ _ok "db-ca.crt 配置完了 (自己署名証明書。本番 CA 証明書に差�
 # 旧アプリ独自命名は何にも読まれない死んだ設定だったため統一した)。
 # owlv-app-run (doas 先のラッパー) が owlv-app 権限で source するため、
 # 操作者本人には読めない owner-only (600, owner owlv-app) にする。
-_log "AP VM の /etc/owl/db.env を実値で生成..."
-_ssh_ap "test -f /etc/owl/db.env.template" ||
-	_die "/etc/owl/db.env.template が無い。vm-ap/setup.sh の実行 (STEP 8) を確認してください"
+_log "AP VM の /etc/owlv/db.env を実値で生成..."
+_ssh_ap "test -f /etc/owlv/db.env.template" ||
+	_die "/etc/owlv/db.env.template が無い。vm-ap/setup.sh の実行 (STEP 8) を確認してください"
 _ssh_ap "sed \
         -e 's/^PGUSER=.*/PGUSER=${DB_APP_USER}/' \
         -e 's#^PGPASSWORD=.*#PGPASSWORD=${APP_PASS}#' \
         -e 's/^PGDATABASE=.*/PGDATABASE=${DB_NAME}/' \
-        /etc/owl/db.env.template > /etc/owl/db.env
-     chmod 600 /etc/owl/db.env
-     chown owlv-app /etc/owl/db.env" ||
+        /etc/owlv/db.env.template > /etc/owlv/db.env
+     chmod 600 /etc/owlv/db.env
+     chown owlv-app /etc/owlv/db.env" ||
 	_die "db.env の生成に失敗しました"
-_ok "/etc/owl/db.env 生成完了 (chmod 600, owner owlv-app)"
+_ok "/etc/owlv/db.env 生成完了 (chmod 600, owner owlv-app)"
 
 # AP VM の db-projector.env を実値で生成 (doc/cqrs.md §8: owlv-projector 専用、
 # owl_app とは別の最小権限ロール)。owl-app の db.env と違い PG* の標準 libpq
 # 変数名で書く — rc.d スクリプトがこのファイルを source して直接 exec するため
 # (owlv-projector は owl-session 経由ではなく rcctl が直接起動するデーモン)。
-_log "AP VM の /etc/owl/db-projector.env を実値で生成..."
-_ssh_ap "test -f /etc/owl/db-projector.env.template" ||
-	_die "/etc/owl/db-projector.env.template が無い。vm-ap/setup.sh の実行 (STEP 8) を確認してください"
+_log "AP VM の /etc/owlv/db-projector.env を実値で生成..."
+_ssh_ap "test -f /etc/owlv/db-projector.env.template" ||
+	_die "/etc/owlv/db-projector.env.template が無い。vm-ap/setup.sh の実行 (STEP 8) を確認してください"
 _ssh_ap "sed \
         -e 's/^PGUSER=.*/PGUSER=${DB_PROJECTOR_USER}/' \
         -e 's#^PGPASSWORD=.*#PGPASSWORD=${PROJECTOR_PASS}#' \
         -e 's/^PGDATABASE=.*/PGDATABASE=${DB_NAME}/' \
-        /etc/owl/db-projector.env.template > /etc/owl/db-projector.env
-     chmod 600 /etc/owl/db-projector.env
-     chown _owlproject /etc/owl/db-projector.env" ||
+        /etc/owlv/db-projector.env.template > /etc/owlv/db-projector.env
+     chmod 600 /etc/owlv/db-projector.env
+     chown _owlproject /etc/owlv/db-projector.env" ||
 	_die "db-projector.env の生成に失敗しました"
 # 起動済みなら新しい接続情報で再起動する (一度 connectDb した後は再読込しないため)。
 # 未起動 (rcctl が無効/未設定) の場合は無害に失敗を無視する。
 _ssh_ap "rcctl restart owlv_projector 2>/dev/null || true"
-_ok "/etc/owl/db-projector.env 生成完了 (chmod 600, owlv_projector 再起動)"
+_ok "/etc/owlv/db-projector.env 生成完了 (chmod 600, owlv_projector 再起動)"
 
 _log "DB シークレットローテーション完了"
 echo ""
@@ -174,4 +174,4 @@ echo "【まだ残っている手動作業】"
 echo "  本番 TLS 証明書への差し替え (内部 CA 発行の証明書が必要):"
 echo "    vm-db:/var/postgresql/data/server.{key,crt}"
 echo "    差し替え後、新しい CA 証明書をこのスクリプトと同じ手順で"
-echo "    vm-ap:/etc/owl/db-ca.crt にも配置すること"
+echo "    vm-ap:/etc/owlv/db-ca.crt にも配置すること"

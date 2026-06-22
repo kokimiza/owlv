@@ -14,9 +14,9 @@
 #   - 作成したい OS アカウントの SSH 公開鍵を手元に用意しておくこと
 set -eu
 
-CONFIG=/etc/owl/infra/owl-config.toml
-KNOWN_HOSTS=/etc/owl/known_hosts
-BACKUP_KEY=/etc/owl/backup_ed25519
+CONFIG=/etc/owlv/infra/owl-config.toml
+KNOWN_HOSTS=/etc/owlv/known_hosts
+BACKUP_KEY=/etc/owlv/backup_ed25519
 
 _log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 _die() {

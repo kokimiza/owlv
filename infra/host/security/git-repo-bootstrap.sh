@@ -9,9 +9,9 @@
 # (既に存在する場合はスキップ)。
 set -eu
 
-CONFIG=/etc/owl/infra/owl-config.toml
-KNOWN_HOSTS=/etc/owl/known_hosts
-BACKUP_KEY=/etc/owl/backup_ed25519
+CONFIG=/etc/owlv/infra/owl-config.toml
+KNOWN_HOSTS=/etc/owlv/known_hosts
+BACKUP_KEY=/etc/owlv/backup_ed25519
 
 _log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 _die() {
@@ -59,7 +59,7 @@ fi
 _log "Git リポジトリ準備完了"
 echo ""
 echo "【まだ残っている手動作業】"
-echo "  1. admin の初期パスワードを変更 (provision.sh 実行ログ参照: /var/log/owl/provision-*.log)"
+echo "  1. admin の初期パスワードを変更 (provision.sh 実行ログ参照: /var/log/owlv/provision-*.log)"
 echo "  2. ローカルから push:"
 echo "     git remote add origin ssh://git@${GIT_IP}:22/${REPO_OWNER}/${REPO_NAME}.git"
 echo "     git push -u origin main"

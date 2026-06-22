@@ -87,9 +87,9 @@ cat >/usr/local/bin/owl-session <<'WRAPPER'
 # (sudo の SUDO_USER と同じ考え方; doc/user.md §4.1)。
 OWLV_SSH_USER="$(id -un)"
 export OWLV_SSH_USER
-[ -r /etc/owl/owlv.env ] && . /etc/owl/owlv.env
+[ -r /etc/owlv/owlv.env ] && . /etc/owlv/owlv.env
 export OWLV_ROOT_ADMIN_USERNAME
-# DB 接続情報 (PG*) は owlv-app 自身が所有する /etc/owl/db.env から
+# DB 接続情報 (PG*) は owlv-app 自身が所有する /etc/owlv/db.env から
 # owlv-app-run (doas 先) が読む — 操作者(本人)の権限では読めない設計に
 # しているため、ここ (owl-session, 本人の uid で実行中) では一切触れない。
 exec doas -u owlv-app /usr/local/libexec/owlv-app-run
@@ -206,13 +206,13 @@ _ok "doas.conf 更新"
 # owlv-app の起動環境にも setenv で渡るよう doas.conf に明記する (上記)。
 if [ -n "$ROOT_ADMIN_USERNAME" ]; then
 	install -d -m 750 /etc/owl
-	printf 'OWLV_ROOT_ADMIN_USERNAME=%s\n' "$ROOT_ADMIN_USERNAME" >/etc/owl/owlv.env
+	printf 'OWLV_ROOT_ADMIN_USERNAME=%s\n' "$ROOT_ADMIN_USERNAME" >/etc/owlv/owlv.env
 	# 640 (root:wheel) だと owl-session (操作者本人の uid で実行中) から
 	# 読めず、OWLV_ROOT_ADMIN_USERNAME が常に未設定になっていた
 	# (実際に発生: [ -r ... ] が false になり無言でスキップされる)。
 	# 値はユーザー名のみで機密性が無いため world-readable で問題ない。
-	chmod 644 /etc/owl/owlv.env
-	_ok "OWLV_ROOT_ADMIN_USERNAME=${ROOT_ADMIN_USERNAME} を /etc/owl/owlv.env に記録 (644)"
+	chmod 644 /etc/owlv/owlv.env
+	_ok "OWLV_ROOT_ADMIN_USERNAME=${ROOT_ADMIN_USERNAME} を /etc/owlv/owlv.env に記録 (644)"
 else
 	_info "警告: OWLV_ROOT_ADMIN_USERNAME 未設定。最初の Admin を自動生成できません。"
 fi
@@ -269,24 +269,24 @@ _ok "SSH 設定 (ポート ${APP_SSH_PORT})"
 # 同じ PG* 命名に統一する。
 _log "DB 接続環境変数テンプレートを配置"
 install -d -m 750 /etc/owl
-cat >/etc/owl/db.env.template <<EOF
-# /etc/owl/db.env.template — owlv-app 専用 (owlv-app-run が source する)
-# db-secrets-rotate.sh が実値で /etc/owl/db.env (chmod 600, owner owlv-app) を生成する。
+cat >/etc/owlv/db.env.template <<EOF
+# /etc/owlv/db.env.template — owlv-app 専用 (owlv-app-run が source する)
+# db-secrets-rotate.sh が実値で /etc/owlv/db.env (chmod 600, owner owlv-app) を生成する。
 PGHOST=${OWL_DB_IP}
 PGPORT=5432
 PGDATABASE=owl
 PGUSER=owl_app
 PGPASSWORD=<手動設定>
 PGSSLMODE=verify-full
-PGSSLROOTCERT=/etc/owl/db-ca.crt
+PGSSLROOTCERT=/etc/owlv/db-ca.crt
 EOF
-chmod 640 /etc/owl/db.env.template
-chown owlv-app /etc/owl/db.env.template
-_ok "DB 接続テンプレート: /etc/owl/db.env.template"
+chmod 640 /etc/owlv/db.env.template
+chown owlv-app /etc/owlv/db.env.template
+_ok "DB 接続テンプレート: /etc/owlv/db.env.template"
 
 # ── owlv-app-run: doas 先のラッパー (DB 接続情報を owlv-app 権限で読む) ──
 # doas は doas.conf に明記した変数しか転送しない (env_reset 相当) ため、
-# 操作者本人の uid (owl-session) で /etc/owl/db.env を source しても doas越しに
+# 操作者本人の uid (owl-session) で /etc/owlv/db.env を source しても doas越しに
 # は伝わらない。さらに db.env を操作者から読める権限にすると秘密情報が
 # 漏れる。doas の cmd ターゲット自体をこのラッパーにし、owlv-app に
 # 切り替わった後 (= db.env を所有者権限で読める状態) で source してから
@@ -297,7 +297,7 @@ install -d -m 755 /usr/local/libexec
 cat >/usr/local/libexec/owlv-app-run <<'WRAPPER'
 #!/bin/sh
 set -eu
-[ -r /etc/owl/db.env ] && . /etc/owl/db.env
+[ -r /etc/owlv/db.env ] && . /etc/owlv/db.env
 export PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD PGSSLMODE PGSSLROOTCERT
 exec /usr/local/bin/owlv-app
 WRAPPER
@@ -312,20 +312,20 @@ _ok "owlv-app-run 配置"
 # ラッパーを経由しないデーモン起動)。パスワードは db-secrets-rotate.sh が
 # 実値で上書きするまでのプレースホルダー。
 _log "owlv-projector 用 DB 接続テンプレートを配置"
-cat >/etc/owl/db-projector.env.template <<EOF
-# /etc/owl/db-projector.env.template — owlv-projector 専用 (doc/cqrs.md §8)
-# db-secrets-rotate.sh が実値で /etc/owl/db-projector.env (chmod 600) を生成する。
+cat >/etc/owlv/db-projector.env.template <<EOF
+# /etc/owlv/db-projector.env.template — owlv-projector 専用 (doc/cqrs.md §8)
+# db-secrets-rotate.sh が実値で /etc/owlv/db-projector.env (chmod 600) を生成する。
 PGHOST=${OWL_DB_IP}
 PGPORT=5432
 PGDATABASE=owl
 PGUSER=owl_projector
 PGPASSWORD=<手動設定>
 PGSSLMODE=verify-full
-PGSSLROOTCERT=/etc/owl/db-ca.crt
+PGSSLROOTCERT=/etc/owlv/db-ca.crt
 EOF
-chmod 640 /etc/owl/db-projector.env.template
-chown _owlproject /etc/owl/db-projector.env.template
-_ok "DB 接続テンプレート (projector): /etc/owl/db-projector.env.template"
+chmod 640 /etc/owlv/db-projector.env.template
+chown _owlproject /etc/owlv/db-projector.env.template
+_ok "DB 接続テンプレート (projector): /etc/owlv/db-projector.env.template"
 
 # ── owlv バイナリのプレースホルダー ───────────────────────
 # 実際のバイナリは owl-control.sh deploy <tag> でインストールされる
@@ -370,7 +370,7 @@ rc_bg="YES"
 . /etc/rc.d/rc.subr
 
 rc_start() {
-	${rcexec} "su -m _owlproject -c '. /etc/owl/db-projector.env && exec ${daemon} ${daemon_flags}'"
+	${rcexec} "su -m _owlproject -c '. /etc/owlv/db-projector.env && exec ${daemon} ${daemon_flags}'"
 }
 
 rc_cmd "$1"

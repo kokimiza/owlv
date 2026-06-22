@@ -79,7 +79,7 @@ openbsd_mirror = "cdn.openbsd.org"
 [dr]
 # §2.2: 時限開口型暗号化クラウド DR
 # ホストは受信者公開鍵のみ保持。秘密鍵はエスクロー管理 (§2.3)
-age_pubkey_file = "/etc/owl/age-recipient.pub"
+age_pubkey_file = "/etc/owlv/age-recipient.pub"
 ramdisk_mount = "/mnt/owl-dr"
 b2_remote = "b2:owl-dr-backup"
 rsyncnet_remote = "rsyncnet:owl-dr-backup"

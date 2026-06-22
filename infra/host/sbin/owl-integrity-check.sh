@@ -1,11 +1,11 @@
 #!/bin/sh
 # owl-integrity-check.sh — 改ざん検知スクリプト (§5)
 # 毎日 02:30 に root の cron から実行される
-# 差分があれば /etc/owl/INTEGRITY_HOLD を作成して自動 DR 射出を停止する
+# 差分があれば /etc/owlv/INTEGRITY_HOLD を作成して自動 DR 射出を停止する
 set -eu
 
-BASELINE=/etc/owl/integrity-baseline.sha256
-HOLD_FILE=/etc/owl/INTEGRITY_HOLD
+BASELINE=/etc/owlv/integrity-baseline.sha256
+HOLD_FILE=/etc/owlv/INTEGRITY_HOLD
 LOGDIR=/var/log/owl
 # POSIX sh では ${$(date ...)} は無効。必ず別行で代入する
 DIFF_TS="$(date +%Y%m%d_%H%M%S)"

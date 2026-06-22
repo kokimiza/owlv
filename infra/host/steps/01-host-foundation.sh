@@ -13,7 +13,7 @@ install -m 700 "${SELF}/host/sbin/owl-integrity-check.sh" /usr/local/sbin/owl-in
 install -m 700 "${SELF}/host/sbin/owl-pfctl-pinhole" /usr/local/sbin/owl-pfctl-pinhole
 
 # known_hosts は provision が上書きできるよう初期化する
-install -m 600 /dev/null /etc/owl/known_hosts
+install -m 600 /dev/null /etc/owlv/known_hosts
 _ok "管理スクリプト配置"
 
 # 設定ファイルを配置 (doas.conf / newsyslog.conf / crontab)

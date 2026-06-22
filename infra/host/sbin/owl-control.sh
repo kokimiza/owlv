@@ -5,13 +5,13 @@
 # doas ルール: /etc/doas.conf 参照
 set -eu
 
-CONFIG=/etc/owl/infra/owl-config.toml
-KNOWN_HOSTS=/etc/owl/known_hosts
-BACKUP_KEY=/etc/owl/backup_ed25519
+CONFIG=/etc/owlv/infra/owl-config.toml
+KNOWN_HOSTS=/etc/owlv/known_hosts
+BACKUP_KEY=/etc/owlv/backup_ed25519
 
 LOCKFILE=/tmp/owl-dr.lock
 LOGDIR=/var/log/owl
-HOLD_FILE=/etc/owl/INTEGRITY_HOLD
+HOLD_FILE=/etc/owlv/INTEGRITY_HOLD
 
 # ── TOML 読み込み ───────────────────────────────────────────
 _toml() {
@@ -138,8 +138,8 @@ cmd_dr_export() {
 	# 設定ファイルのスナップショット
 	_info "設定スナップショット"
 	install -d "${WORK_DIR}/config"
-	cp /etc/owl/infra/owl-config.toml "${WORK_DIR}/config/"
-	cp /etc/owl/integrity-baseline.sha256 "${WORK_DIR}/config/" 2>/dev/null || true
+	cp /etc/owlv/infra/owl-config.toml "${WORK_DIR}/config/"
+	cp /etc/owlv/integrity-baseline.sha256 "${WORK_DIR}/config/" 2>/dev/null || true
 
 	# tar + age 暗号化
 	_info "圧縮・暗号化"
@@ -180,7 +180,7 @@ cmd_basebackup() {
 	_check_hold
 
 	SNAP_TS="$(date +%Y%m%d_%H%M%S)"
-	DEST="/var/backup/owl/basebackup/${SNAP_TS}"
+	DEST="/var/backup/owlv/basebackup/${SNAP_TS}"
 
 	[ -f "$BACKUP_KEY" ] || _die "バックアップ SSH 鍵が未配置: ${BACKUP_KEY}"
 	install -d "$DEST"
@@ -193,7 +193,7 @@ cmd_basebackup() {
 	_ssh "root@${DB_IP}" "rm -rf /tmp/owl-bb"
 
 	# 30日超のバックアップを削除 (§2.1 保持ポリシー)
-	find /var/backup/owl/basebackup/ -maxdepth 1 -type d -mtime +30 \
+	find /var/backup/owlv/basebackup/ -maxdepth 1 -type d -mtime +30 \
 		-exec rm -rf {} + 2>/dev/null || true
 
 	_unlock
@@ -272,7 +272,7 @@ cmd_status() {
 	echo ""
 
 	echo "--- 直近のバックアップ ---"
-	ls -t /var/backup/owl/basebackup/ 2>/dev/null | head -3 |
+	ls -t /var/backup/owlv/basebackup/ 2>/dev/null | head -3 |
 		while read -r d; do echo "  $d"; done || echo "  なし"
 }
 
