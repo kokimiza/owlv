@@ -89,6 +89,13 @@ else
 	_info "HLint: 既存のためスキップ"
 fi
 
+# ── Forgejo Runner 専用ユーザー (signify 鍵の所有者として先に必要) ────────
+# 元はこの後の「Forgejo Runner」セクションで作成していたが、signify 鍵生成
+# (このすぐ下) が --owner _runner を要求するため、ユーザー作成自体を先に移した
+# (実際に発生: install: unknown user _runner)。
+id _runner >/dev/null 2>&1 ||
+	useradd -m -d /var/forgejo-runner -s /sbin/nologin _runner
+
 # ── リリース署名鍵 (signify, doc/dev_sec_ops.md §4.2 三重検証の「タグ署名」) ──
 # CI が生成する manifest.txt (タグ/コミット/uname -r/各バイナリのSHA256) に
 # signify で署名し、AP VM 側 (owl-control.sh cmd_deploy) が公開鍵で検証する。
@@ -165,9 +172,7 @@ else
 	_info "forgejo-runner: 既存のためスキップ"
 fi
 
-# runner 専用ユーザー
-id _runner >/dev/null 2>&1 ||
-	useradd -m -d /var/forgejo-runner -s /sbin/nologin _runner
+# runner 専用ユーザーは既に作成済み (signify 鍵生成セクションの前段を参照)
 install -d -m 750 -o _runner /var/forgejo-runner
 install -d -m 750 -o _runner /var/log/forgejo-runner
 
