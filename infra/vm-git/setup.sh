@@ -236,43 +236,64 @@ su -m git -c "forgejo forgejo-cli actions register \
 	_die "Runner のオフライン登録に失敗しました"
 _ok "Runner vm-build 登録完了"
 
-# ── owlv リポジトリ作成 + build.yml 反映 (Web UI 手動操作を排除) ──────────
-# 以前は「リポジトリ作成」「.forgejo/workflows/build.yml の追加」を Web UI
-# 経由の手動作業としていたが、両方とも CLI/ローカル git 操作だけで成立するため
-# 自動化する。push は Forgejo の HTTP API ではなく、git ユーザーが所有する
-# ベアリポジトリへ直接ローカルクローン+push することで、トークン発行なしに
-# 完結させる (このホップは TLS 不要、同一VM内のファイルシステム操作のため)。
+# ── ボットトークン発行 (リポジトリ作成 / ブランチ保護 / deploy-poll 共用) ──
+# HTTP API + write:repository スコープのトークンで行う。
+# 同じトークンを owl-control.sh deploy-poll (§4.2) にも使い回すため、ホストへ
+# 標準出力経由で引き渡す (08-vm-provision.sh が DEPLOY_POLL_TOKEN= 行を捕捉して
+# /etc/owlv/forgejo_token へ書き込む)。
+_log "ボットトークンを発行"
+BOT_TOKEN=$(su -m git -c "forgejo admin user generate-access-token \
+	--username admin --token-name 'owlv-bot-$(date +%s)' --scopes write:repository --raw \
+	--config ${FORGEJO_DATA}/custom/conf/app.ini") ||
+	_die "ボットトークンの発行に失敗しました"
+[ -n "$BOT_TOKEN" ] || _die "ボットトークンが空でした"
+_ok "ボットトークン発行"
+
+API="http://${OWL_GIT_IP}:3000/api/v1"
+
 _log "owlv リポジトリを作成"
-su -m git -c "forgejo admin repo create --owner admin --name owlv \
-	--config ${FORGEJO_DATA}/custom/conf/app.ini" 2>/dev/null ||
+curl -fsS -X POST \
+	-H "Authorization: token ${BOT_TOKEN}" \
+	-H "Content-Type: application/json" \
+	-d '{"name":"owlv","auto_init":true,"default_branch":"main","private":true}' \
+	"${API}/user/repos" >/dev/null 2>&1 ||
 	_info "owlv リポジトリは既存のためスキップ"
 _ok "owlv リポジトリ"
 
-REPO_GIT_DIR="${FORGEJO_DATA}/repositories/admin/owlv.git"
 if [ -f "${SCRIPT_DIR}/build.yml" ]; then
 	_log ".forgejo/workflows/build.yml をリポジトリへ反映"
-	su -m git -c "
-		set -e
-		WORK=\$(mktemp -d)
-		git clone -q '${REPO_GIT_DIR}' \"\$WORK\"
-		cd \"\$WORK\"
+	WORK=$(mktemp -d)
+	git -c http.extraHeader="Authorization: token ${BOT_TOKEN}" \
+		clone -q "${API%/api/v1}/admin/owlv.git" "$WORK" || _die "owlv リポジトリの clone に失敗しました"
+	(
+		cd "$WORK" || exit 1
 		git checkout -q -B main
 		mkdir -p .forgejo/workflows
-		cp '${SCRIPT_DIR}/build.yml' .forgejo/workflows/build.yml
+		cp "${SCRIPT_DIR}/build.yml" .forgejo/workflows/build.yml
 		git add .forgejo/workflows/build.yml
-		if git diff --cached --quiet; then
-			echo '  変更なし'
+		if git -c user.email='admin@localhost' -c user.name='admin' diff --cached --quiet; then
+			echo "  変更なし"
 		else
 			git -c user.email='admin@localhost' -c user.name='admin' \
 				commit -q -m 'ci: add/update build.yml'
-			git push -q origin HEAD:main
+			git -c http.extraHeader="Authorization: token ${BOT_TOKEN}" push -q origin HEAD:main
 		fi
-		rm -rf \"\$WORK\"
-	" || _die "build.yml の反映に失敗しました"
+	) || _die "build.yml の反映に失敗しました"
+	rm -rf "$WORK"
 	_ok "build.yml 反映"
 else
 	_info "警告: ${SCRIPT_DIR}/build.yml が見つかりません。手動で追加してください"
 fi
+
+# ブランチ保護 (main への直接 push 禁止 / 最低1 Approve 必須、doc/dev_sec_ops.md §3.3)
+_log "ブランチ保護を設定"
+curl -fsS -X POST \
+	-H "Authorization: token ${BOT_TOKEN}" \
+	-H "Content-Type: application/json" \
+	-d '{"branch_name":"main","enable_push":false,"required_approvals":1,"enable_status_check":true}' \
+	"${API}/repos/admin/owlv/branch_protections" >/dev/null 2>&1 ||
+	_info "ブランチ保護は既存のためスキップ (失敗時は要手動確認)"
+_ok "ブランチ保護"
 
 _log "Git VM セットアップ完了"
 echo ""
@@ -280,17 +301,7 @@ echo " 【管理者パスワード — 初回ログイン後に変更してく�
 echo "   admin / ${FORGEJO_ADMIN_PASS}"
 echo ""
 echo " 【残りの手動作業】"
-echo "   (リポジトリ作成と build.yml 反映は本スクリプトが完了済み)"
-echo "   1. ブランチ保護 (main への直接 push 禁止 / 最低1 Approve 必須、doc/dev_sec_ops.md §3.3):"
-echo "      su -m git -c \"forgejo admin user generate-access-token \\"
-echo "        --username admin --token-name branch-protect --scopes write:repository \\"
-echo "        --config ${FORGEJO_DATA}/custom/conf/app.ini\""
-echo "      curl -X POST -H 'Authorization: token <上記トークン>' \\"
-echo "        -H 'Content-Type: application/json' \\"
-echo "        http://${OWL_GIT_IP}:3000/api/v1/repos/admin/owlv/branch_protections \\"
-echo "        -d '{\"branch_name\":\"main\",\"enable_push\":false,\"required_approvals\":1,\"enable_status_check\":true}'"
-echo "   2. owl-control.sh deploy-poll (doc/dev_sec_ops.md §4.2) 用トークンを発行し、"
-echo "      ホスト側の /etc/owlv/forgejo_token (mode 600, root 所有) に手動投入:"
-echo "      su -m git -c \"forgejo admin user generate-access-token \\"
-echo "        --username admin --token-name deploy-poll --scopes read:repository,write:repository \\"
-echo "        --config ${FORGEJO_DATA}/custom/conf/app.ini\""
+echo "   なし (リポジトリ作成・build.yml 反映・ブランチ保護はすべて自動化済み)"
+echo ""
+# 08-vm-provision.sh が標準出力からこの行を捕捉して /etc/owlv/forgejo_token (ホスト) へ書き込む。
+echo "DEPLOY_POLL_TOKEN=${BOT_TOKEN}"

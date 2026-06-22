@@ -65,8 +65,11 @@ _vm_provision() {
 		"echo 'https://cdn.openbsd.org/pub/OpenBSD' > /etc/installurl"
 
 	# setup.sh を実行
+	# 標準出力は tee /dev/stderr でリアルタイム表示しつつ変数にも捕捉する。
+	# vm-git/setup.sh は最後に "DEPLOY_POLL_TOKEN=<token>" を1行出力するため
+	# (doc/dev_sec_ops.md §4.2)、ここで捕まえてホスト側ファイルへ書き込む。
 	_log "[${vmname}] setup.sh を実行中..."
-	ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
+	SETUP_OUTPUT=$(ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
 		"OWL_AP_IP='${OWL_AP_IP}' OWL_DB_IP='${OWL_DB_IP}' \
          OWL_GIT_IP='${OWL_GIT_IP}' OWL_BUILD_IP='${OWL_BUILD_IP}' \
          OWL_RELEASE='${OWL_RELEASE}' GHC_VERSION='${GHC_VERSION}' \
@@ -74,8 +77,20 @@ _vm_provision() {
          FORGEJO_RUNNER_VERSION='${FORGEJO_RUNNER_VER}' \
          FORGEJO_RUNNER_SECRET='${FORGEJO_RUNNER_SECRET}' \
          OWLV_ROOT_ADMIN_USERNAME='${OWLV_ROOT_ADMIN_USERNAME}' \
-         sh /provision/${vmname}/setup.sh"
+         sh /provision/${vmname}/setup.sh" 2>&1 | tee /dev/stderr)
 	_log "[${vmname}] setup.sh 完了"
+
+	if [ "$vmname" = "vm-git" ]; then
+		DEPLOY_POLL_TOKEN=$(printf '%s\n' "$SETUP_OUTPUT" | awk -F= '/^DEPLOY_POLL_TOKEN=/{print $2; exit}')
+		if [ -n "$DEPLOY_POLL_TOKEN" ]; then
+			install -d -m 700 /etc/owlv
+			printf '%s' "$DEPLOY_POLL_TOKEN" >/etc/owlv/forgejo_token
+			chmod 600 /etc/owlv/forgejo_token
+			_ok "[vm-git] deploy-poll トークンを /etc/owlv/forgejo_token へ配置"
+		else
+			_info "[vm-git] 警告: deploy-poll トークンを取得できませんでした。setup.sh の出力を確認してください"
+		fi
+	fi
 
 	# 完了マーカーを書き込む (再実行時の二重実行防止。PROV_KEY 削除前に行う)
 	# /provision/ はこの関数の先頭で作成済みなので全 VM で存在が保証されている。
