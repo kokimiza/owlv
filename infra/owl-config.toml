@@ -45,10 +45,11 @@ disk = "/var/vmm/build.img"
 size = "50G"
 
 [toolchain]
-# (base ^>= 4.20 / GHC >= 9.10) を満たすには OpenBSD 7.9 (現行、
-# 2026-05-19 リリース) の packages/amd64 にある ghc-9.10.1 が必要
-# (7.8 までの ghc-9.8.3 では base が古く要件を満たせない)
-ghc_version = "9.10.1"
+# GHC2024 (base ^>= 4.20) の要件を満たす最低バージョン。OpenBSD の
+# packages/amd64 は point release ごとに古いバージョン名の ghc パッケージを
+# 消すため、vm-build/setup.sh はこの値を pkg_add のターゲット指定ではなく
+# 「無印 ghc をインストールした後の事後検証の下限」としてのみ使う。
+ghc_version = "9.10"
 cabal_version = "3.16.1.0"
 owl_version = ""           # デプロイ時に vX.Y.Z を設定
 

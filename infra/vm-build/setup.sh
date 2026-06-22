@@ -18,22 +18,33 @@ _ok() { _log "  ✓ $*"; }
 OWL_BUILD_IP="${OWL_BUILD_IP:?OWL_BUILD_IP is required}"
 OWL_GIT_IP="${OWL_GIT_IP:?OWL_GIT_IP is required}"
 FORGEJO_RUNNER_SECRET="${FORGEJO_RUNNER_SECRET:?FORGEJO_RUNNER_SECRET is required}"
-# GHC2024 (base ^>= 4.20 / GHC >= 9.10) を要求する。OpenBSD 7.9
-# (2026-05-19 リリース、現行) の packages/amd64 には ghc-9.10.1.tgz のみが
-# 存在し (7.8 までの ghc-9.8.3 では base が古く GHC2024 を満たせない)、
-# (実際に発生: "Can't find ghc-9.6")。
-GHC_VERSION="${GHC_VERSION:-9.10.1}"
+# GHC2024 (base ^>= 4.20 / GHC >= 9.10) を要求する。OpenBSD の packages/amd64
+# はリリース内でも point release ごとに古いバージョン名の .tgz を消す
+# (実際に発生: まず "Can't find ghc-9.6"、その後 "Can't find ghc-9.10.1" も
+# 発生)。pkg_add のターゲットをパッケージのフルバージョンで固定すると
+# 必ずいつか壊れるので、無印の ghc (= packages/amd64 にある現行版) を入れ、
+# 実際にインストールされたバージョンが GHC2024 の要件を満たすか事後確認する。
+GHC_MIN_VERSION="${GHC_VERSION:-9.10}"
 FORGEJO_RUNNER_VERSION="${FORGEJO_RUNNER_VERSION:-12.11.1}"
 
 _log "Build VM セットアップ開始 (${OWL_BUILD_IP})"
 
 # ── パッケージ (GHC / cabal / 依存) ─────────────────────
-_log "GHC ${GHC_VERSION} および開発ツールをインストール"
+_log "GHC (>= ${GHC_MIN_VERSION}) および開発ツールをインストール"
 # GHC は ports から (バイナリパッケージとして提供)
-pkg_add "ghc-${GHC_VERSION}" cabal-install git curl 2>/dev/null ||
-	pkg_add ghc cabal-install git curl 2>/dev/null ||
+pkg_add ghc cabal-install git curl 2>/dev/null ||
 	_die "GHC のインストールに失敗しました。pkg_add ghc を手動で実行してください"
-_ok "GHC / cabal / git"
+
+_installed_ghc=$(pkg_info | awk '/^ghc-[0-9]/{print $1; exit}' | sed -E 's/^ghc-([0-9]+\.[0-9]+).*/\1/')
+[ -n "$_installed_ghc" ] || _die "インストールされた GHC のバージョンを判定できませんでした (pkg_info の出力を確認してください)"
+
+awk -v have="$_installed_ghc" -v need="$GHC_MIN_VERSION" 'BEGIN{
+		split(have, h, "."); split(need, n, ".");
+		hv = h[1] * 1000 + h[2]; nv = n[1] * 1000 + n[2];
+		exit (hv >= nv) ? 0 : 1
+	}' ||
+	_die "インストールされた GHC ${_installed_ghc} は GHC2024 要件 (>= ${GHC_MIN_VERSION}) を満たしません。OpenBSD ${OWL_RELEASE:-該当} の packages/amd64 にそれ以上の ghc パッケージが無い可能性があります"
+_ok "GHC ${_installed_ghc} / cabal / git"
 
 # cabal のキャッシュ ($HOME/.cabal = /root/.cabal) は go の GOPATH/GOCACHE と
 # 同じ理由で "/" を圧迫する (実際に発生: Hackage インデックス取得後の
