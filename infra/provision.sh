@@ -201,6 +201,23 @@ _bridge_members() {
 	printf '%s\n' "${members:-'(なし)'}"
 }
 
+# ディスクイメージ作成・OS (再)インストール前のホスト側空き容量チェック。
+# 実際に発生: ホスト側の空き容量が尽きた状態で vm-db の OS 再インストールを
+# 行い、スパースイメージへの書き込みがホスト側で失敗 → ゲストカーネルパニック
+# ("dump to dev ... not possible") → bsd.rd への無限リブートループになった。
+# VM ディスクは sparse なので宣言サイズ (owl-config.toml の size=) ではなく
+# 実消費が問題になる。事前に最低限の空きを確認し、足りなければゲストを
+# クラッシュさせる前にここで止める。
+_require_free_space() {
+	local path="$1" min_gb="$2" avail_kb avail_gb
+	avail_kb=$(df -k "$path" | awk 'NR==2{print $4}')
+	avail_gb=$((avail_kb / 1024 / 1024))
+	if [ "$avail_gb" -lt "$min_gb" ]; then
+		_die "${path} の空き容量が ${avail_gb}G しかありません (${min_gb}G 以上が必要)。VM ディスクイメージの実消費を確認してください: du -sh ${path}/*.img"
+	fi
+	_info "${path} 空き容量: ${avail_gb}G (>= ${min_gb}G 必要)"
+}
+
 _vm_state_for() {
 	local vmname="$1" out="/tmp/owl-vmctl-state.$$" state
 

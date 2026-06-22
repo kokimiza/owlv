@@ -7,7 +7,7 @@
 #
 # 【注意】
 #   - VM の中身 (PostgreSQL データ等) は復元できない。DB バックアップを先に確保すること。
-#   - --wipe を付けると /var/vmm/*.img が完全に消える。
+#   - --wipe を付けると /home/vmm/*.img が完全に消える。
 #   - 実行後は SSH でログインできる状態を維持するよう、PF を「SSH のみ通す」ルールにする。
 #
 # 【このスクリプトが巻き戻すもの】
@@ -47,7 +47,7 @@ echo " provision.sh 緊急巻き戻し"
 if [ "$WIPE_DISKS" -eq 1 ]; then
 	echo " モード: VM ディスクイメージも削除 (--wipe)"
 	echo ""
-	echo " 本当に /var/vmm/*.img を削除しますか？"
+	echo " 本当に /home/vmm/*.img を削除しますか？"
 	echo " DB データが完全に失われます。[yes/no]"
 	printf "> "
 	read -r CONFIRM
@@ -143,11 +143,11 @@ done
 # ── STEP 5: VM ディスクイメージ ──────────────────────────────
 _log "STEP 5: VM ディスクイメージ"
 if [ "$WIPE_DISKS" -eq 1 ]; then
-	for img in /var/vmm/ap.img /var/vmm/db.img /var/vmm/git.img /var/vmm/build.img; do
+	for img in /home/vmm/ap.img /home/vmm/db.img /home/vmm/git.img /home/vmm/build.img; do
 		rm -f "$img" && _ok "削除: $img" || _skip "$img"
 	done
 else
-	_skip "VM ディスクイメージ (--wipe なし。手動削除: rm /var/vmm/*.img)"
+	_skip "VM ディスクイメージ (--wipe なし。手動削除: rm /home/vmm/*.img)"
 fi
 
 # ── STEP 1: 管理スクリプト / 設定ファイル ────────────────────
@@ -245,7 +245,7 @@ echo " 現在の PF: SSH (ポート 22) のみ通過"
 echo " 現在の doas: wheel グループのみ permit"
 echo ""
 if [ "$WIPE_DISKS" -eq 0 ]; then
-	echo " VM ディスクは /var/vmm/ に残っています。"
+	echo " VM ディスクは /home/vmm/ に残っています。"
 	echo " 完全に消す場合: doas sh /etc/owlv/infra/undo-provision.sh --wipe"
 fi
 echo " 再プロビジョニング: doas sh /etc/owlv/infra/provision.sh"

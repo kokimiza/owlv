@@ -19,6 +19,10 @@ _vm_install() {
 	local vmname="$1" vmip="$2" gateway="$3" disk="$4" swname="$5" setnames="${6:--x* -game* -man* done}"
 
 	_info "-- ${vmname} (${vmip})"
+	# 既存イメージ (git.img/build.img/db.img 等) は運用が進むほど実消費が
+	# 増えるため、宣言サイズではなくホスト側の「今の」空きを毎回確認する
+	# (実際に発生: 空き容量切れで OS 再インストール中にゲストがパニック)。
+	_require_free_space "$(dirname "$disk")" 10
 	_log "[${vmname}] install.conf を生成 (gateway=${gateway})..."
 
 	# install.conf を動的生成して httpd のルートに置く
@@ -246,7 +250,7 @@ rm -f "$_status_tmp" "${_status_tmp}.err"
 
 # 再実行時のディスク上書き事故防止: 既に OS インストール済み (SSH 到達可能) な
 # VM は再インストールせずスキップする。意図的に作り直す場合は、対象 VM を
-# vmctl stop し、/var/vmm/<vm>.img を削除してから再実行すること。
+# vmctl stop し、/home/vmm/<vm>.img を削除してから再実行すること。
 #
 # 重要: OS インストール済みか判定する SSH 到達性チェックは、VM を停止する
 # *前* に行うこと。以前は全 running/starting VM を一律で先に停止してから
@@ -285,10 +289,10 @@ _vm_install_if_needed() {
 	_vm_install "$vmname" "$vmip" "$gateway" "$disk" "$swname" "$setnames"
 }
 
-_vm_install_if_needed "vm-db" "$OWL_DB_IP" "$HOST_INT_IP" "/var/vmm/db.img" "internal_lan"
-_vm_install_if_needed "vm-git" "$OWL_GIT_IP" "$HOST_DEV_IP" "/var/vmm/git.img" "dev_lan"
-_vm_install_if_needed "vm-build" "$OWL_BUILD_IP" "$HOST_DEV_IP" "/var/vmm/build.img" "dev_lan"
-_vm_install_if_needed "vm-ap" "$OWL_AP_IP" "$HOST_INT_IP" "/var/vmm/ap.img" "internal_lan" "-comp* -x* -game* -man* done"
+_vm_install_if_needed "vm-db" "$OWL_DB_IP" "$HOST_INT_IP" "/home/vmm/db.img" "internal_lan"
+_vm_install_if_needed "vm-git" "$OWL_GIT_IP" "$HOST_DEV_IP" "/home/vmm/git.img" "dev_lan"
+_vm_install_if_needed "vm-build" "$OWL_BUILD_IP" "$HOST_DEV_IP" "/home/vmm/build.img" "dev_lan"
+_vm_install_if_needed "vm-ap" "$OWL_AP_IP" "$HOST_INT_IP" "/home/vmm/ap.img" "internal_lan" "-comp* -x* -game* -man* done"
 
 # 全台の OS クリーンインストールが成功した後に、完全な vm.conf を適用
 _log "全 VM の OS インストール完了。本番用 vm.conf を配置して reload します..."

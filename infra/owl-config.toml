@@ -22,26 +22,26 @@ build_vm = "10.0.2.20"
 [vm.ap]
 name = "vm-ap"
 memory = "512M"
-disk = "/var/vmm/ap.img"
+disk = "/home/vmm/ap.img"
 size = "20G"
 
 [vm.db]
 name = "vm-db"
 memory = "1G"
-disk = "/var/vmm/db.img"
+disk = "/home/vmm/db.img"
 size = "50G"
 
 [vm.git]
 name = "vm-git"
 memory = "1G"
-disk = "/var/vmm/git.img"
+disk = "/home/vmm/git.img"
 size = "50G"
 
 [vm.build]
 # GHC は多くのメモリを要求する (§3.1)
 name = "vm-build"
 memory = "4G"
-disk = "/var/vmm/build.img"
+disk = "/home/vmm/build.img"
 size = "50G"
 
 [toolchain]
