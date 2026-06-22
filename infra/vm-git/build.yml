@@ -1,0 +1,120 @@
+# CI/CD パイプライン (doc/dev_sec_ops.md §3.2 / §4.1 / §4.2)
+#
+# - PR (opened/synchronize/reopened): Sec(HLint) → Dev(build/test) のみ実行する。
+#   結果は Forgejo Web UI 上で管理者の Approve 判断材料になる(§3.3)。
+# - main への merge (= 承認済み PR が統合された push): 同じ Sec/Dev を再実行した
+#   うえで、タグ付与・リリースビルド・Forgejo Release 公開まで自動実行する。
+#   このリリース作成こそが owl-control.sh deploy-poll(§4.2)が検知する
+#   「承認済み・未デプロイ」状態であり、デプロイの起点になる。
+#
+# vm-build は Docker 非搭載・host モード専用(§3.1)。Node.js を要する公式
+# actions/checkout 等は使わず、checkout からリリース作成まで base ツール
+# (git/curl/cabal)のみで構成する(§5: base ユーティリティ優先方針)。
+#
+# 既知の未実装事項: §4.1①の依存関係セキュリティ監査(hsec/OSV, Gated Sync)は
+# 同期パイプライン自体が未着手のため、ここでは HLint のみを Sec ゲートとする。
+
+name: build
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: [openbsd, haskell]
+    steps:
+      - name: checkout
+        run: |
+          set -eu
+          git init -q .
+          git -c http.extraHeader="Authorization: token ${FORGEJO_TOKEN}" \
+            fetch --depth 50 "${FORGEJO_SERVER_URL}/${FORGEJO_REPOSITORY}.git" "${FORGEJO_SHA}"
+          git checkout -q FETCH_HEAD
+
+      # ① Sec: 静的解析 (§4.1①)
+      - name: HLint
+        run: hlint app src test
+
+      # ② Dev: 再現可能なクリーンビルドと Core ユニットテスト (§3.2, §4.1②)
+      - name: cabal build (-Werror, CI 相当)
+        run: cabal build --ghc-options="-Werror"
+
+      - name: cabal test (Core のみ。Shell は手動確認対象、§3.2)
+        run: cabal test
+
+      # ここから先は main への承認済みマージ時のみ実行する (§4.2)。
+      # PR 単体(承認前)では絶対にタグ付与・リリースを行わない。
+      - name: リリースタグの算出
+        if: ${{ forgejo.event_name == 'push' && forgejo.ref == 'refs/heads/main' }}
+        id: ver
+        run: |
+          set -eu
+          CABAL_VER=$(awk -F': *' '/^version:/{print $2; exit}' owlv.cabal)
+          SHA_SHORT=$(printf '%s' "${FORGEJO_SHA}" | cut -c1-7)
+          echo "tag=v${CABAL_VER}-${SHA_SHORT}" >>"$FORGEJO_OUTPUT"
+
+      - name: 成果物の収集とマニフェスト署名 (§4.2 三重検証の根拠データ)
+        if: ${{ steps.ver.outputs.tag != '' }}
+        run: |
+          set -eu
+          # owlv (cabal の executable コンポーネント名) は AP VM 側の配置名
+          # owlv-app に合わせてリネームする (infra/host/sbin/owl-control.sh
+          # cmd_deploy が期待するダウンロード資産名と一致させる)。
+          cp "$(cabal list-bin owlv)" owlv-app-openbsd-amd64
+          cp "$(cabal list-bin owlv-batch-center)" owlv-batch-center-openbsd-amd64
+          cp "$(cabal list-bin owlv-projector)" owlv-projector-openbsd-amd64
+
+          TAG="${{ steps.ver.outputs.tag }}"
+          {
+            echo "tag=${TAG}"
+            echo "commit=${FORGEJO_SHA}"
+            echo "uname_r=$(uname -r)"
+            echo "ghc_version=$(ghc --numeric-version)"
+            for f in owlv-app-openbsd-amd64 owlv-batch-center-openbsd-amd64 owlv-projector-openbsd-amd64; do
+              echo "${f}.sha256=$(sha256 -q "$f")"
+            done
+          } >manifest.txt
+
+          # AP VM 側 (owl-control.sh cmd_deploy) が /etc/owlv/release-signify.pub
+          # で検証する。秘密鍵は Build VM 上のみに存在し、CI ジョブ実行ユーザー
+          # (_runner) のみが読める (infra/vm-build/setup.sh で生成、§4.2)。
+          signify -S -s /etc/owlv/release-signify.sec -m manifest.txt -x manifest.txt.sig
+
+      - name: "タグを作成して push (§3.3: 不変セマンティックバージョニング)"
+        if: ${{ steps.ver.outputs.tag != '' }}
+        run: |
+          set -eu
+          TAG="${{ steps.ver.outputs.tag }}"
+          git tag "$TAG" "${FORGEJO_SHA}"
+          git -c http.extraHeader="Authorization: token ${FORGEJO_TOKEN}" \
+            push "${FORGEJO_SERVER_URL}/${FORGEJO_REPOSITORY}.git" "refs/tags/${TAG}"
+
+      - name: Forgejo リリースを作成し成果物を添付
+        if: ${{ steps.ver.outputs.tag != '' }}
+        run: |
+          set -eu
+          TAG="${{ steps.ver.outputs.tag }}"
+          UNAME_R="$(uname -r)"
+          GHC_VER="$(ghc --numeric-version)"
+          BODY="commit: ${FORGEJO_SHA}\\nuname -r: ${UNAME_R}\\nGHC: ${GHC_VER}"
+
+          REL_ID=$(curl -fsS -X POST \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"body\":\"${BODY}\",\"draft\":false,\"prerelease\":false}" \
+            "${FORGEJO_API_URL}/repos/${FORGEJO_REPOSITORY}/releases" |
+            grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+          [ -n "$REL_ID" ] || { echo "リリース作成に失敗しました" >&2; exit 1; }
+
+          for f in \
+            owlv-app-openbsd-amd64 owlv-batch-center-openbsd-amd64 owlv-projector-openbsd-amd64 \
+            manifest.txt manifest.txt.sig; do
+            curl -fsS -X POST \
+              -H "Authorization: token ${FORGEJO_TOKEN}" \
+              -F "attachment=@${f}" \
+              "${FORGEJO_API_URL}/repos/${FORGEJO_REPOSITORY}/releases/${REL_ID}/assets?name=${f}" >/dev/null
+          done

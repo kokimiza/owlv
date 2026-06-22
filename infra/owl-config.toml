@@ -89,3 +89,13 @@ window_seconds = 300
 [forgejo]
 version = "15.0.3"
 runner_version = "12.11.1"
+# vm-git/setup.sh が `forgejo admin repo create --owner admin --name owlv` で
+# リポジトリを作成するため、所有者は Forgejo 上の admin ユーザーになる。
+owner = "admin"
+repo = "owlv"
+# owl-control.sh deploy-poll (§4.2) が Forgejo Releases API を読み書きするための
+# アクセストークン。本ファイルには値を書かない — Forgejo Web UI または
+# `forgejo admin user generate-access-token` で発行し、ホストの
+# /etc/owlv/forgejo_token (mode 600, root 所有) に手動投入する
+# (BACKUP_KEY / AGE_PUB と同じ「秘密は手動投入」方針)。
+api_token_file = "/etc/owlv/forgejo_token"

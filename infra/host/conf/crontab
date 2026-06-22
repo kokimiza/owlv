@@ -1,8 +1,12 @@
 # /etc/crontab — ホスト OS タスクスケジューラ
-# §2.2: 深夜 DR 射出。§2.1 L1: 週次ベースバックアップ。§5: 日次改ざん検知。
+# §2.2: 深夜 DR 射出。§2.1 L1: 週次ベースバックアップ。§5: 日次改ざん検知。§4.2: デプロイ承認ポーリング。
 
 SHELL=/bin/sh
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
+
+# デプロイ承認ポーリング (§4.2) — 5分間隔。PR の Approve & Merge で
+# Forgejo Runner が生成した承認済みリリースを検知し、未デプロイなら自動デプロイする。
+*/5  *  *  *  *  owl-control  /usr/local/sbin/owl-control.sh deploy-poll >> /var/log/owlv/deploy.log 2>&1
 
 # 週次 ベースバックアップ (§2.1 L1) — 日曜 01:00
 0    1  *  *  0  owl-control  /usr/local/sbin/owl-control.sh basebackup >> /var/log/owlv/basebackup.log 2>&1

@@ -64,6 +64,42 @@ cabal update 2>/dev/null || true
 pkg_add sqlite3 2>/dev/null ||
 	_info "警告: sqlite3 が見つかりません。手動でインストールしてください: pkg_add sqlite3"
 
+# ── HLint (CI の Sec ゲート、doc/dev_sec_ops.md §4.1①で使用) ──────────
+# OpenBSD ports に hlint パッケージは無いため cabal でビルドする。
+# ビルド成果のみ /usr/local/bin へ複製し、ビルド用キャッシュは cabal の
+# 通常キャッシュ ($CABAL_DIR) に残る (go の forgejo/forgejo-runner ビルドとは
+# 違い、hlint 自体は owlv のビルドキャッシュと共存させて再ビルドを避ける)。
+if ! command -v hlint >/dev/null 2>&1; then
+	_log "HLint をインストール"
+	cabal install hlint --install-method=copy --installdir=/usr/local/bin --overwrite-policy=always ||
+		_die "HLint のインストールに失敗しました"
+	_ok "HLint: $(hlint --version 2>/dev/null | head -1)"
+else
+	_info "HLint: 既存のためスキップ"
+fi
+
+# ── リリース署名鍵 (signify, doc/dev_sec_ops.md §4.2 三重検証の「タグ署名」) ──
+# CI が生成する manifest.txt (タグ/コミット/uname -r/各バイナリのSHA256) に
+# signify で署名し、AP VM 側 (owl-control.sh cmd_deploy) が公開鍵で検証する。
+# GPG ではなく signify を使うのは、本プロジェクトが脆弱性DB同期(§4.1①)でも
+# signify を第一選択としているのと同じ理由 (OpenBSD ネイティブの検証経路)。
+# CI は無人実行のためパスフレーズ無し (-n) で鍵を生成する。秘密鍵は
+# Forgejo Runner の実行ユーザー (_runner) のみが読めるようにする。
+SIGNIFY_SEC=/etc/owlv/release-signify.sec
+SIGNIFY_PUB=/etc/owlv/release-signify.pub
+if [ ! -f "$SIGNIFY_SEC" ]; then
+	_log "リリース署名鍵 (signify) を生成"
+	install -d -m 750 -o _runner /etc/owlv
+	signify -G -n -p "$SIGNIFY_PUB" -s "$SIGNIFY_SEC" ||
+		_die "signify 鍵の生成に失敗しました"
+	chown _runner "$SIGNIFY_SEC" "$SIGNIFY_PUB"
+	chmod 600 "$SIGNIFY_SEC"
+	chmod 644 "$SIGNIFY_PUB"
+	_ok "signify 鍵: ${SIGNIFY_PUB}"
+else
+	_info "signify 鍵: 既存のためスキップ"
+fi
+
 # ── Forgejo Runner (OpenBSD: ソースからビルド) ───────────────────
 # 公式リリースは linux-amd64 / linux-arm64 のみ。OpenBSD では go build が必要 (§3.1)。
 # 純粋 Go 実装のため Node.js 等の追加依存は不要。
@@ -165,15 +201,17 @@ rc_cmd $1
 EOF
 chmod 755 /etc/rc.d/forgejo-runner
 # ── オフライン Runner 登録 (Web UI 不要) ─────────────────────
-# vm-git/setup.sh で forgejo forgejo-cli actions register が完了している前提。
-# forgejo-runner create-runner-file はネットワーク接続なしで .runner ファイルを生成する。
+# vm-git/setup.sh で forgejo forgejo-cli actions register --labels 'openbsd,haskell'
+# が完了している前提。ラベルはその登録時点でシークレットに紐づいてサーバー側に
+# 確定済みであり、create-runner-file (オフライン登録、ネットワーク接続不要) は
+# 同じシークレットに対応する .runner ファイルをローカルに生成するだけなので
+# --labels は受け付けない (実際に発生: "unknown flag: --labels")。
 _log "Forgejo Runner オフライン登録 (.runner ファイル生成)"
 su -m _runner -c "cd /var/forgejo-runner && \
 	forgejo-runner create-runner-file \
 		--instance 'http://${OWL_GIT_IP}:3000' \
 		--secret '${FORGEJO_RUNNER_SECRET}' \
-		--name vm-build \
-		--labels 'openbsd,haskell'" ||
+		--name vm-build" ||
 	_die "forgejo-runner create-runner-file に失敗しました"
 _ok ".runner ファイル生成"
 
@@ -190,3 +228,6 @@ echo " 【残りの手動作業】"
 echo "   1. owlv リポジトリに .forgejo/workflows/build.yml を追加"
 echo "   2. git push で CI トリガーを確認:"
 echo "      Forgejo → owlv → Actions タブ"
+echo "   3. リリース署名公開鍵を AP VM の /etc/owlv/release-signify.pub へ配置"
+echo "      (owl-control.sh cmd_deploy の三重検証で使用、doc/dev_sec_ops.md §4.2):"
+cat "$SIGNIFY_PUB"
