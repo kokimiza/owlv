@@ -32,8 +32,8 @@ _log "Build VM セットアップ開始 (${OWL_BUILD_IP})"
 # ── パッケージ (GHC / cabal / 依存) ─────────────────────
 _log "GHC (>= ${GHC_MIN_VERSION}) および開発ツールをインストール"
 # GHC は ports から (バイナリパッケージとして提供)
-pkg_add ghc cabal-install git curl 2>/dev/null ||
-	_die "GHC のインストールに失敗しました。pkg_add ghc を手動で実行してください"
+pkg_add ghc cabal-install git curl ||
+	_die "GHC のインストールに失敗しました。上記 pkg_add の出力を確認してください"
 
 _installed_ghc=$(pkg_info | awk '/^ghc-[0-9]/{print $1; exit}' | sed -E 's/^ghc-([0-9]+\.[0-9]+).*/\1/')
 [ -n "$_installed_ghc" ] || _die "インストールされた GHC のバージョンを判定できませんでした (pkg_info の出力を確認してください)"
