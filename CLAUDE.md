@@ -18,7 +18,7 @@ cabal build --ghc-options="-Werror"           # CI-equivalent build
 ## Project overview
 
 `owlv` is an IFRS-compliant personal-finance TUI: Haskell + brick, Event Sourcing + CQRS.
-Event store: SQLite (append-only). Read model: RocksDB.
+Event store: PostgreSQL (append-only, vm-db; `Shell.EventStore`). Read model: SQLite3, in-process on the AP VM, fed by a single-writer projector subscribed to the event stream (not yet implemented).
 
 The domain specification is [doc/ifrs_standard.md](doc/ifrs_standard.md) (Japanese, v2.0) — the single authoritative source for all accounting logic, including the nine-phase closing pipeline (§1.2). Read the relevant section before implementing any accounting or closing-process feature. Do not duplicate spec content into this file or into docs; reference it by section number.
 
@@ -27,7 +27,7 @@ The domain specification is [doc/ifrs_standard.md](doc/ifrs_standard.md) (Japane
 Dependency direction is one-way and absolute: `Core ← Shell`. FCIS draws one line — pure vs. effectful — not a stack of layers, so there is no separate `UseCases/` folder (unlike classic Clean Architecture, which has an interactor layer between domain and infrastructure).
 
 - `src/Core/` — pure. MUST NOT import IO, brick, database, clock, random, or anything effectful.
-- `src/Shell/` — the only place IO is allowed: SQLite event store, RocksDB projector, brick TUI, clock, and the single generic command executor (load events → fold `evolve` → `decide` → append events). Use-case-shaped orchestration (load data → call Core → persist) lives here, as plain functions that call into Core — not as a separate layer or typeclass.
+- `src/Shell/` — the only place IO is allowed: PostgreSQL event store, SQLite3 read-model projector (single-writer; WAL mode for concurrent readers), brick TUI, clock, and the single generic command executor (load events → fold `evolve` → `decide` → append events). Use-case-shaped orchestration (load data → call Core → persist) lives here, as plain functions that call into Core — not as a separate layer or typeclass.
 - `app/Main.hs` — config, wiring, startup only.
 
 ### Recipe for adding a feature (follow exactly)

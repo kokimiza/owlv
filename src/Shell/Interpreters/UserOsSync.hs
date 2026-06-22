@@ -2,7 +2,7 @@
 
 {- | AP VM の OS アカウントへの一方向プロジェクション (doc/user.md §3)
 
-owl-app から doas 経由で /usr/local/sbin/owl-user-sync (単一の許可コマンド)
+owlv-app から doas 経由で /usr/local/sbin/owl-user-sync (単一の許可コマンド)
 だけを呼ぶ。"スクリプトの自己申告だけで成功を確定しない" 方針のため、apply の
 あとに必ず observe（読み取り専用の生の事実報告）を取り、望ましい状態との
 突合はこの Haskell モジュール側で行う。

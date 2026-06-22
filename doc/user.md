@@ -123,7 +123,7 @@ vm-ap の sshd 設定（[infra/vm-ap/setup.sh:101](../infra/vm-ap/setup.sh#L101)
 [infra/vm-ap/setup.sh](../infra/vm-ap/setup.sh) の `add-owl-operator` / `add-owl-maintainer`（58–85行）を、引数駆動・冪等な単一ヘルパー `/usr/local/sbin/owl-user-sync` に統合し置き換える。
 
 ```sh
-# 例: owl-app が doas 経由で呼ぶ
+# 例: owlv-app が doas 経由で呼ぶ
 owl-user-sync --apply '{"username":"alice","role":"Operator","status":"Active","ssh_keys":["ssh-ed25519 AAAA..."]}'
 ```
 
@@ -140,9 +140,9 @@ owl-user-sync --apply '{"username":"alice","role":"Operator","status":"Active","
 
 ```
 # /etc/doas.conf (AP VM)
-# owl-app（owlv TUI を動かす実行ユーザー）にのみ、このヘルパー1本だけを許可する。
+# owlv-app（owlv TUI を動かす実行ユーザー）にのみ、このヘルパー1本だけを許可する。
 # owl-operators / owl-maintainers には doas を一切許可しない（昇格経路ゼロ）。
-permit nopass owl-app cmd /usr/local/sbin/owl-user-sync
+permit nopass owlv-app cmd /usr/local/sbin/owl-user-sync
 ```
 
 これにより、TUI 経由でアカウントが乗っ取られても、`owl-user-sync` が受理する JSON のスキーマ以外の操作はできない。Yubikey による SSH 層の保護（dev_sec_ops.md §1.1.1）とは独立した境界として機能する。
@@ -153,7 +153,7 @@ permit nopass owl-app cmd /usr/local/sbin/owl-user-sync
 
 ### 4.1 ログイン観測（リアルタイム）
 
-[infra/vm-ap/setup.sh:45](../infra/vm-ap/setup.sh#L45) の `owl-session` ラッパーは `ForceCommand` として sshd から直接 exec される。sshd は接続元の OS ユーザー名を環境（`$USER`/`whoami(1)`）で確定済みの状態で渡すため、`owl-app` 起動時にそれを読み取り、**Core の `User` 射影と突き合わせてから** TUI を開始する：
+[infra/vm-ap/setup.sh:45](../infra/vm-ap/setup.sh#L45) の `owl-session` ラッパーは `ForceCommand` として sshd から直接 exec される。sshd は接続元の OS ユーザー名を環境（`$USER`/`whoami(1)`）で確定済みの状態で渡すため、`owlv-app` 起動時にそれを読み取り、**Core の `User` 射影と突き合わせてから** TUI を開始する：
 
 1. `whoami` で `osUser` を取得
 2. `User` 射影を `osUser` で検索。存在しない、または `Status /= Active` なら **TUI を起動せず即終了**（OS 側でロックし忘れていても、アプリ側がもう一段の門番になる）

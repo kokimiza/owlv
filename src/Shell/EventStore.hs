@@ -35,6 +35,8 @@ module Shell.EventStore
   , forTenant
   , listActiveTenantIds
   , runMigration
+  , loadEventsSince
+  , bindTenantSession
   ) where
 
 import Control.Exception (SomeException, try)
@@ -116,13 +118,25 @@ EventStore の値そのものが「すでにどの会社の帳簿か確定済み
 -}
 forTenant :: PG.Connection -> TenantId -> IO (Either AppError EventStore)
 forTenant conn tid = do
+  result <- bindTenantSession conn tid
+  pure $ case result of
+    Left err -> Left err
+    Right () -> Right (mkTenantStore conn tid)
+
+{- | RLSのセッション変数 `app.tenant_id` をこのコネクション上で設定する
+(doc/tenant_isolation.md §5.3, §6.3)。`forTenant` 本体と `Shell.Projector`
+の読み取り専用カタッチアップ (doc/cqrs.md §3.2) の双方から呼ばれる共通部分。
+-}
+bindTenantSession :: PG.Connection -> TenantId -> IO (Either AppError ())
+bindTenantSession conn tid = do
   -- バインドパラメータ必須（doc/tenant_isolation.md §5.3: SQLインジェクション対策）。
   result <-
     try @SomeException $
-      PG.execute conn "SELECT set_config('app.tenant_id', ?, false)" (PG.Only (unTenantId tid))
+      void $
+        PG.execute conn "SELECT set_config('app.tenant_id', ?, false)" (PG.Only (unTenantId tid))
   pure $ case result of
     Left ex -> Left (AppStorageError (T.pack (show ex)))
-    Right _ -> Right (mkTenantStore conn tid)
+    Right () -> Right ()
 
 {- | アクティブな Tenant の一覧（doc/tenant_isolation.md §6.6: 日次バッチを
 Tenantごとにループさせるための列挙）。`tenants` テーブルへの無条件 SELECT は
@@ -159,13 +173,45 @@ loadFromPg conn tid = do
       "SELECT payload::text FROM events WHERE tenant_id = ? OR tenant_id IS NULL ORDER BY seq ASC"
       (PG.Only (unTenantId tid)) ::
       IO [PG.Only Text]
-  events <- mapM decodeRow rows
+  events <- mapM (\(PG.Only txt) -> decodeEventText txt) rows
   pure (StreamVersion tenantVer identityVer, events)
- where
-  decodeRow (PG.Only txt) =
-    case Aeson.eitherDecodeStrict (BS8.pack (T.unpack txt)) of
-      Left err -> fail ("event decode failed: " <> err)
-      Right ev -> pure ev
+
+decodeEventText :: Text -> IO Event
+decodeEventText txt =
+  case Aeson.eitherDecodeStrict (BS8.pack (T.unpack txt)) of
+    Left err -> fail ("event decode failed: " <> err)
+    Right ev -> pure ev
+
+{- | `owlv-projector` (doc/cqrs.md §3.2) のカタッチアップ専用読み取り。
+`Shell.EventStore.esLoad` (= 'loadFromPg') と違い、ストリーム全体ではなく
+チェックポイント以降の差分だけを、`seq` 付きで返す。
+
+`mTid = Just tid` の場合は呼び出し側が事前に 'bindTenantSession' で
+RLSセッション変数を設定しておくこと（このクエリ自体も `tenant_id = ?` で
+明示的に絞るが、RLSは多重防御の最終防衛線であり、ここでも有効にしておく
+— doc/tenant_isolation.md §3）。`mTid = Nothing` は Identity stream
+(`tenant_id IS NULL`) で、これは現在のRLSポリシー上いずれのセッションからも
+無条件に見えるため事前の束縛は不要。
+-}
+loadEventsSince ::
+  PG.Connection -> Maybe TenantId -> Int64 -> Int -> IO (Either AppError [(Int64, Event)])
+loadEventsSince conn mTid afterSeq lim = safeIO $ do
+  rows <- case mTid of
+    Just tid ->
+      PG.query
+        conn
+        "SELECT seq, payload::text FROM events \
+        \WHERE tenant_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?"
+        (unTenantId tid, afterSeq, lim) ::
+        IO [(Int64, Text)]
+    Nothing ->
+      PG.query
+        conn
+        "SELECT seq, payload::text FROM events \
+        \WHERE tenant_id IS NULL AND seq > ? ORDER BY seq ASC LIMIT ?"
+        (afterSeq, lim) ::
+        IO [(Int64, Text)]
+  mapM (\(s, txt) -> (,) s <$> decodeEventText txt) rows
 
 queryOneVersion :: (PG.ToRow q) => PG.Connection -> PG.Query -> q -> IO Int64
 queryOneVersion conn q params = do
@@ -194,9 +240,11 @@ appendToPg conn tid (StreamVersion expectedTenant expectedIdentity) evts = do
           syncTenantRegistry conn tenantEvts
           mapM_ (insertEvent conn (Just tid)) tenantEvts
           advanceTenantVersion conn tid (length tenantEvts)
+          notifyProjector conn (unTenantId tid)
         unless (null identityEvts) $ do
           mapM_ (insertEvent conn Nothing) identityEvts
           advanceIdentityVersion conn (length identityEvts)
+          notifyProjector conn "identity"
         pure (Right ())
   pure $ case result of
     Left ex -> Left (AppStorageError (T.pack (show ex)))
@@ -204,6 +252,31 @@ appendToPg conn tid (StreamVersion expectedTenant expectedIdentity) evts = do
  where
   tenantEvts = filter (not . isIdentityEvent) evts
   identityEvts = filter isIdentityEvent evts
+
+{- | コミット後に `owlv-projector` を起こすための、内容を持たない
+"起きて" シグナル送信 (doc/cqrs.md §3.1)。
+
+これは購読/Pull型アーキテクチャを崩すものではない —— `appendToPg` は
+`Shell.Projector`/`Shell.ReadModel` を一切 import せず、SQLiteの存在も
+スキーマも知らない。実際の状態転送は `owlv-projector` が自分の
+`_projector_checkpoint` を起点に `loadEventsSince` で能動的に読みに行く
+(Pull)側で行われ、`pg_notify` はそのポーリング間隔を短縮するだけの
+レイテンシ最適化に過ぎない。リスナーが存在しなくても `pg_notify` は
+エラーにならず単に無視されるため (fire-and-forget)、プロジェクターが
+停止していてもイベントストアへの書き込みは何の影響も受けない —
+コマンド側の「イベントを正しく検証してPostgreSQLへ安全に追記する」
+という責務に、リードモデル側の都合は一切混入しない。
+
+PostgreSQLのNOTIFYはトランザクションのコミット後にのみ配送されるため、
+このトランザクションがロールバックされた場合に誤って配送されることもない。
+チャンネル名は固定で、ペイロードに対象 (TenantIdの文字列、または
+Identity streamを表す"identity") を積む。配送が欠落してもプロジェクター側の
+ポーリング (§3.1) が最大2秒の遅延で追従するため、NOTIFY自体の到達は
+ベストエフォートでよい。
+-}
+notifyProjector :: PG.Connection -> Text -> IO ()
+notifyProjector conn payload =
+  void $ PG.execute conn "SELECT pg_notify('owlv_events', ?)" (PG.Only payload)
 
 -- | stream_version行が無ければ0で作成してからFOR UPDATEで行ロックする。
 lockTenantVersion :: PG.Connection -> TenantId -> IO Int64

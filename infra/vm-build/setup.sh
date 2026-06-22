@@ -35,15 +35,23 @@ pkg_add "ghc-${GHC_VERSION}" cabal-install git curl 2>/dev/null ||
 	_die "GHC のインストールに失敗しました。pkg_add ghc を手動で実行してください"
 _ok "GHC / cabal / git"
 
-# cabal パッケージインデックスを更新 (build 時ではなく今実行しておく)
+# cabal のキャッシュ ($HOME/.cabal = /root/.cabal) は go の GOPATH/GOCACHE と
+# 同じ理由で "/" を圧迫する (実際に発生: Hackage インデックス取得後の
+# useradd で "/etc/spwd.db: No space left on device")。さらに "_build" と
+# いう専用ユーザーはこのスクリプトのどこにも作成されておらず su は常に失敗し、
+# 結局 root (/root/.cabal) で実行されていた。go と同様に /usr/local 配下へ
+# 明示的に退避する。
+export CABAL_DIR=/usr/local/cabal-data
+install -d "$CABAL_DIR"
 _info "cabal update"
-su -m _build -c "cabal update" 2>/dev/null ||
-	cabal update 2>/dev/null || true
+cabal update 2>/dev/null || true
 
-# owlv の依存パッケージ (brick, rocksdb-haskell, etc.)
-# RocksDB C ライブラリが必要
-pkg_add rocksdb 2>/dev/null ||
-	_info "警告: rocksdb が見つかりません。手動でインストールしてください: pkg_add rocksdb"
+# owlv の依存パッケージ。リードモデル (doc/cqrs.md) の direct-sqlite は
+# bundled amalgamation を静的コンパイルするため (systemlib フラグ既定 False)、
+# ビルドに system の libsqlite3 は不要。ここでの sqlite3 パッケージは
+# .sqlite3 ファイルを直接調査するための CLI ツール用途のみ (doc/cqrs.md §7)。
+pkg_add sqlite3 2>/dev/null ||
+	_info "警告: sqlite3 が見つかりません。手動でインストールしてください: pkg_add sqlite3"
 
 # ── Forgejo Runner (OpenBSD: ソースからビルド) ───────────────────
 # 公式リリースは linux-amd64 / linux-arm64 のみ。OpenBSD では go build が必要 (§3.1)。

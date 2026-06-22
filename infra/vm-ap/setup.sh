@@ -29,6 +29,10 @@ _log "AP VM セットアップ開始 (${OWL_AP_IP})"
 # ── パッケージ ────────────────────────────────────────────
 _log "パッケージインストール"
 pkg_add -x bash 2>/dev/null || true # owlv は ksh/sh で動作するが念のため
+# owlv バイナリは direct-sqlite が静的コンパイルした SQLite を内包しており
+# 動的リンク依存は無い。ここでの sqlite3 は /var/lib/owlv/readmodel/*.sqlite3
+# を運用者が直接調査するための CLI ツール用途のみ (doc/cqrs.md §7)。
+pkg_add sqlite3 2>/dev/null || _info "警告: sqlite3 が見つかりません。手動でインストールしてください: pkg_add sqlite3"
 _ok "パッケージ"
 
 # ── ユーザー・グループ (doc/user.md §2/§3) ──────────────────────────
@@ -41,28 +45,28 @@ groupadd owl-maintainers 2>/dev/null || true
 # owl-maintainers: 通常の ksh シェル + sudo 相当の権限なし (参照専用の保守者)
 _ok "グループ作成 (owl-operators / owl-maintainers)"
 
-# owl-app: owlv 本体を実際に動かす専用サービスアカウント。
+# owlv-app: owlv 本体を実際に動かす専用サービスアカウント。
 # 接続してきた本人(alice 等)の OS アカウントには doas 権限を一切与えない —
-# 昇格できるのは owl-app だけ、かつ owl-app が呼べるのは owl-user-sync 一本だけ
+# 昇格できるのは owlv-app だけ、かつ owlv-app が呼べるのは owl-user-sync 一本だけ
 # (doc/user.md §3.2: cron_batch.md の _owlbatch と同じゼロ権限委譲パターン)。
-id owl-app >/dev/null 2>&1 || useradd -s /sbin/nologin -d /nonexistent owl-app
-_ok "owl-app サービスアカウント"
+id owlv-app >/dev/null 2>&1 || useradd -s /sbin/nologin -d /nonexistent owlv-app
+_ok "owlv-app サービスアカウント"
 
 # ── ForceCommand ラッパー ─────────────────────────────────
-# 運用ユーザーがSSH接続すると owl-app として owlv が直接起動し、exit = SSH切断。
-# OWLV_ROOT_ADMIN_USERNAME は doas.conf の setenv で owl-app プロセスへ引き継がれる
+# 運用ユーザーがSSH接続すると owlv-app として owlv が直接起動し、exit = SSH切断。
+# OWLV_ROOT_ADMIN_USERNAME は doas.conf の setenv で owlv-app プロセスへ引き継がれる
 # (doc/user.md §7: このユーザー名で SSH した時だけ Admin を自動生成する)。
 _log "owl-session ForceCommand ラッパーを配置"
 cat >/usr/local/bin/owl-session <<'WRAPPER'
 #!/bin/sh
-# owl-app として実行されると実ユーザーは owl-app になり、本人の身元が消える。
+# owlv-app として実行されると実ユーザーは owlv-app になり、本人の身元が消える。
 # doas.conf の setenv 指定で OWLV_SSH_USER だけを明示的に引き継ぐ
 # (sudo の SUDO_USER と同じ考え方; doc/user.md §4.1)。
 OWLV_SSH_USER="$(id -un)"
 export OWLV_SSH_USER
 [ -r /etc/owl/owlv.env ] && . /etc/owl/owlv.env
 export OWLV_ROOT_ADMIN_USERNAME
-exec doas -u owl-app /usr/local/bin/owl-app
+exec doas -u owlv-app /usr/local/bin/owlv-app
 WRAPPER
 chmod 755 /usr/local/bin/owl-session
 _ok "owl-session 配置"
@@ -83,7 +87,7 @@ _die() { echo "owl-user-sync: $*" >&2; exit 1; }
 
 _json_field() {
 	# 超簡易 JSON フィールド抽出 (依存パッケージを増やさないための割り切り)。
-	# 入力フォーマットは owl-app 側 (aeson) が生成する固定キー順を前提とする。
+	# 入力フォーマットは owlv-app 側 (aeson) が生成する固定キー順を前提とする。
 	printf '%s' "$1" | sed -n "s/.*\"$2\":\"\\?\\([^\",}]*\\)\"\\?.*/\\1/p" | head -1
 }
 
@@ -158,14 +162,14 @@ SCRIPT
 chmod 755 /usr/local/sbin/owl-user-sync
 _ok "owl-user-sync 配置"
 
-# ── doas: owl-app のみ owl-user-sync を呼べる。各 OS アカウント自身には何も許可しない ──
+# ── doas: owlv-app のみ owl-user-sync を呼べる。各 OS アカウント自身には何も許可しない ──
 _log "doas.conf にユーザー同期権限を追加"
-# Hop1 (operator/maintainer → owl-app): 本人識別用の OWLV_SSH_USER と
+# Hop1 (operator/maintainer → owlv-app): 本人識別用の OWLV_SSH_USER と
 # ブートストラップ用の OWLV_ROOT_ADMIN_USERNAME だけ引き継ぐ。
-DOAS_LINE_SESSION="permit nopass :owl-operators as owl-app setenv { OWLV_SSH_USER OWLV_ROOT_ADMIN_USERNAME } cmd /usr/local/bin/owl-app"
-DOAS_LINE_SESSION2="permit nopass :owl-maintainers as owl-app setenv { OWLV_SSH_USER OWLV_ROOT_ADMIN_USERNAME } cmd /usr/local/bin/owl-app"
-# Hop2 (owl-app → root): owl-user-sync 一本だけ。setenv は不要 (JSON 引数で受け渡す)。
-DOAS_LINE_SYNC="permit nopass owl-app cmd /usr/local/sbin/owl-user-sync"
+DOAS_LINE_SESSION="permit nopass :owl-operators as owlv-app setenv { OWLV_SSH_USER OWLV_ROOT_ADMIN_USERNAME } cmd /usr/local/bin/owlv-app"
+DOAS_LINE_SESSION2="permit nopass :owl-maintainers as owlv-app setenv { OWLV_SSH_USER OWLV_ROOT_ADMIN_USERNAME } cmd /usr/local/bin/owlv-app"
+# Hop2 (owlv-app → root): owl-user-sync 一本だけ。setenv は不要 (JSON 引数で受け渡す)。
+DOAS_LINE_SYNC="permit nopass owlv-app cmd /usr/local/sbin/owl-user-sync"
 for line in "$DOAS_LINE_SESSION" "$DOAS_LINE_SESSION2" "$DOAS_LINE_SYNC"; do
 	grep -qF "$line" /etc/doas.conf 2>/dev/null || echo "$line" >>/etc/doas.conf
 done
@@ -173,7 +177,7 @@ _ok "doas.conf 更新"
 
 # ── OWLV_ROOT_ADMIN_USERNAME の引き継ぎ ───────────────────────────────────
 # provision.sh が owl-config.toml [user] root_admin_username を環境変数で注入する。
-# owl-app の起動環境にも setenv で渡るよう doas.conf に明記する (上記)。
+# owlv-app の起動環境にも setenv で渡るよう doas.conf に明記する (上記)。
 if [ -n "$ROOT_ADMIN_USERNAME" ]; then
 	install -d -m 750 /etc/owl
 	printf 'OWLV_ROOT_ADMIN_USERNAME=%s\n' "$ROOT_ADMIN_USERNAME" >/etc/owl/owlv.env
@@ -246,14 +250,14 @@ _ok "DB 接続テンプレート: /etc/owl/db.env.template"
 
 # ── owlv バイナリのプレースホルダー ───────────────────────
 # 実際のバイナリは owl-control.sh deploy <tag> でインストールされる
-if [ ! -f /usr/local/bin/owl-app ]; then
-	cat >/usr/local/bin/owl-app <<'STUB'
+if [ ! -f /usr/local/bin/owlv-app ]; then
+	cat >/usr/local/bin/owlv-app <<'STUB'
 #!/bin/sh
 echo "owlv はまだインストールされていません。"
 echo "ホストで: doas owl-control.sh deploy <vX.Y.Z>"
 exit 1
 STUB
-	chmod 755 /usr/local/bin/owl-app
+	chmod 755 /usr/local/bin/owlv-app
 	_info "owlv スタブを配置 (deploy コマンドで上書き)"
 fi
 

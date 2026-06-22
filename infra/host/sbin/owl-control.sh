@@ -224,7 +224,7 @@ cmd_deploy() {
         set -e
         ftp -o /tmp/owlv-new '${PKG_URL}'
         chmod 755 /tmp/owlv-new
-        mv /tmp/owlv-new /usr/local/bin/owl-app
+        mv /tmp/owlv-new /usr/local/bin/owlv-app
         rcctl restart owlv 2>/dev/null || true
     "
 

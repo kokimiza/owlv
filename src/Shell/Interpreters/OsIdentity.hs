@@ -1,9 +1,9 @@
 {- | SSH 経由で確立した OS ログイン名の取得 (doc/user.md §4.1)
 
 owl-session (ForceCommand ラッパー、infra/vm-ap/setup.sh) は接続してきた本人
-ではなく専用サービスアカウント owl-app として owlv を起動する
-(doas -u owl-app; doc/user.md §3.2 のゼロ権限委譲)。そのため実行中の
-プロセスの実ユーザーは常に owl-app であり、getLoginName は使えない。
+ではなく専用サービスアカウント owlv-app として owlv を起動する
+(doas -u owlv-app; doc/user.md §3.2 のゼロ権限委譲)。そのため実行中の
+プロセスの実ユーザーは常に owlv-app であり、getLoginName は使えない。
 本人の OS ユーザー名は owl-session が doas 越しに渡す環境変数
 OWLV_SSH_USER から取得する。これが無い場合（コンソールでの直接実行など）は
 getLoginName にフォールバックする。
