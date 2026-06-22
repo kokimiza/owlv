@@ -248,28 +248,12 @@ else
 fi
 rm -f "$_status_tmp" "${_status_tmp}.err"
 
-# 再実行時のディスク上書き事故防止: 既に OS インストール済み (SSH 到達可能) な
-# VM は再インストールせずスキップする。意図的に作り直す場合は、対象 VM を
-# vmctl stop し、/home/vmm/<vm>.img を削除してから再実行すること。
-#
-# 重要: OS インストール済みか判定する SSH 到達性チェックは、VM を停止する
-# *前* に行うこと。以前は全 running/starting VM を一律で先に停止してから
-# 判定していたため、前回 OS インストールが成功して稼働中の VM まで巻き込んで
-# 停止され、SSH が届かなくなって「未インストール」と誤判定され、毎回ディスクが
-# 上書きされて再インストールされる事故が起きていた (実際に発生: vm-db は
-# postgresql インストール失敗で STEP 8 が落ちただけで OS は入っていたのに、
-# 再実行のたびに STEP 7 で素通りせず再インストールされていた)。
-# 再インストールが必要な VM (未インストール、または前回の中断で
-# running/starting のまま残っている) だけをここで個別に停止する。
+# 状態が running/starting のまま残っている VM だけ、インストール前に個別停止する。
 _vm_install_if_needed() {
 	local vmname="$1" vmip="$2" gateway="$3" disk="$4" swname="$5" setnames="${6:-}"
-	if _vm_os_installed "$vmip"; then
-		_ok "${vmname} (${vmip}) は既に SSH 到達可能 → OS インストールをスキップ"
-		return 0
-	fi
 	_vmstate=$(_vm_state_for "$vmname" || true)
 	if [ "$_vmstate" = "running" ] || [ "$_vmstate" = "starting" ]; then
-		_log "[${vmname}] SSH 到達不可だが状態は ${_vmstate} → 停止してから再インストール..."
+		_log "[${vmname}] 状態は ${_vmstate} → 停止してから再インストール..."
 		vmctl stop -f "$vmname" 2>/dev/null || true
 		_sw=0
 		while :; do

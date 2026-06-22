@@ -13,16 +13,12 @@ PROV_PUBKEY="$(cat ${PROV_KEY}.pub)"
 _log "プロビジョニング公開鍵: ${PROV_PUBKEY}"
 _ok "プロビジョニング鍵: ${PROV_KEY}"
 
-# DR バックアップ用の恒久鍵 (owl-control.sh が VM に SSH するために使用)
-if [ ! -f "$BACKUP_KEY" ]; then
-	_log "DR バックアップ鍵を新規生成: ${BACKUP_KEY}"
-	ssh-keygen -t ed25519 -N "" -C "owl-backup" -f "$BACKUP_KEY" -q
-	chmod 600 "$BACKUP_KEY"
-	_ok "DR バックアップ鍵: ${BACKUP_KEY} (各 VM の authorized_keys に追加される)"
-else
-	_log "DR バックアップ鍵: ${BACKUP_KEY} 既存 → 再利用"
-	_info "DR バックアップ鍵: ${BACKUP_KEY} 既存のため再利用"
-fi
+# owl-control.sh が VM に SSH するために使用
+_log "DR バックアップ鍵を生成: ${BACKUP_KEY}"
+rm -f "$BACKUP_KEY" "${BACKUP_KEY}.pub"
+ssh-keygen -t ed25519 -N "" -C "owl-backup-$(date +%Y%m%d)" -f "$BACKUP_KEY" -q
+chmod 600 "$BACKUP_KEY"
+_ok "DR バックアップ鍵: ${BACKUP_KEY} (各 VM の authorized_keys に追加される)"
 BACKUP_PUBKEY="$(cat ${BACKUP_KEY}.pub)"
 _log "バックアップ公開鍵: ${BACKUP_PUBKEY}"
 

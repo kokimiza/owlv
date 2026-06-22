@@ -80,10 +80,6 @@
 #
 #   ※ 再実行時は rsync だけ打てば差分だけ転送される。
 #
-#   ※ SSH が途中で切れた場合、再ログイン後は同じコマンド (doas sh /etc/owlv/infra/provision.sh)
-#     を打つだけでよい。各 STEP は実体 (ファイル・SSH 到達性・完了マーカー) を見て
-#     既に完了した分をスキップするため、未完了の STEP から自動的に再開する。
-#
 # ━━━ 【Yubikey が届いたら】━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #
 #   ssh <YOUR_USERNAME>@<HOST_IP> 'doas sh /etc/owlv/infra/host/security/yubikey-setup.sh'
@@ -118,32 +114,6 @@ _step() { printf '\n━━━ [%s/%s] %s\n' "$1" "$TOTAL" "$2"; }
 _ok() { printf '    ✓ %s\n' "$*"; }
 _info() { printf '      %s\n' "$*"; }
 _log() { printf '    [%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
-
-# 再開判定用ヘルパー: PROV_KEY / BACKUP_KEY は STEP 6 で確定するため、
-# ここでは変数参照のみ (呼び出し時点の値が使われる)。
-_ssh_quiet() {
-	local key="$1" ip="$2" cmd="$3"
-	ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-		-o ConnectTimeout=4 -o BatchMode=yes "root@${ip}" "$cmd" >/dev/null 2>&1
-}
-
-# OS インストール済み判定 (STEP 7 再実行時のディスク上書き事故を防ぐ)。
-# install.conf で PROV_PUBKEY を root に登録しているため、インストール完了直後は
-# PROV_KEY で到達できる。STEP 8 完了後は PROV_KEY が VM から削除されるため
-# BACKUP_KEY でのみ到達できる。どちらかで到達できれば「OS インストール済み」とみなす。
-_vm_os_installed() {
-	local ip="$1"
-	_ssh_quiet "$PROV_KEY" "$ip" true || _ssh_quiet "$BACKUP_KEY" "$ip" true
-}
-
-# VM 内部プロビジョニング完了判定 (STEP 8 再実行時の二重実行を防ぐ)。
-# 完了マーカーは PROV_KEY 削除前の setup.sh 完了時点で書き込む (08-vm-provision.sh 参照)。
-# /provision/ は全 VM で _vm_provision の先頭で作成されるため存在が保証されている。
-_vm_provisioned() {
-	local ip="$1"
-	_ssh_quiet "$PROV_KEY" "$ip" "test -f /provision/.owl-provisioned" ||
-		_ssh_quiet "$BACKUP_KEY" "$ip" "test -f /provision/.owl-provisioned"
-}
 
 _vmctl_status_to() {
 	local out="$1" err="${1}.err"
@@ -286,7 +256,7 @@ _log "  internal_lan: AP=${OWL_AP_IP} DB=${OWL_DB_IP}"
 _log "  dev_lan:      Git=${OWL_GIT_IP} Build=${OWL_BUILD_IP}"
 _log "  GHC=${GHC_VERSION}  PG=${PG_VERSION}  Forgejo=${FORGEJO_VER}  Runner=${FORGEJO_RUNNER_VER}"
 
-LOGDIR=/var/log/owl
+LOGDIR=/var/log/owlv
 HOST_INT_IP="10.0.1.1"
 HOST_DEV_IP="10.0.2.1"
 PROV_KEY=/etc/owlv/prov_ed25519     # プロビジョニング用の使い捨て SSH 鍵
