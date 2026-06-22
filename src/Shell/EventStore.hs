@@ -492,7 +492,25 @@ runMigration conn = do
       \) WITH CHECK ( \
       \  tenant_id = current_setting('app.tenant_id', true)::uuid \
       \)"
+  -- infra/vm-db/schema.sql と同期させること。
+  -- events は追記専用なので SELECT+INSERT のみ。stream_version/identity_stream_version
+  -- は楽観ロック用カウンタであり advanceTenantVersion/advanceIdentityVersion が UPDATE
+  -- し、lockTenantVersion/lockIdentityVersion の `SELECT ... FOR UPDATE` も PostgreSQL
+  -- 仕様上 UPDATE 権限を要求する。これらを欠くと appendToPg が常に権限不足で失敗する。
+  _ <- PG.execute_ conn "GRANT SELECT, INSERT ON events TO owl_app"
+  _ <-
+    PG.execute_
+      conn
+      "GRANT SELECT, INSERT, UPDATE ON stream_version, identity_stream_version TO owl_app"
   -- 日次バッチが処理対象Tenantを自前で列挙するための最小権限GRANT
   -- (doc/tenant_isolation.md §6.6, listActiveTenantIds)。
   _ <- PG.execute_ conn "GRANT SELECT (tenant_id, status) ON tenants TO owl_app"
+  -- syncTenantRegistry が TenantCreated で INSERT、TenantSuspended/Archived で
+  -- UPDATE status する（tenants は events と違い追記専用ログではなく、
+  -- 集約の現在状態を表すミュータブルなレジストリのため）。
+  _ <-
+    PG.execute_
+      conn
+      "GRANT INSERT (tenant_id, name, status, kind, kind_detail) ON tenants TO owl_app"
+  _ <- PG.execute_ conn "GRANT UPDATE (status) ON tenants TO owl_app"
   pure ()

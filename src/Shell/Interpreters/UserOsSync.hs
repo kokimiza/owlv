@@ -102,12 +102,13 @@ defaultHelperPath = "/usr/local/sbin/owl-user-sync"
 Haskell 側で desired state と比較してから SyncSucceeded を返す。
 -}
 applyAndVerify :: FilePath -> UserSyncRequest -> IO SyncOutcome
-applyAndVerify helperPath req = either id id <$> runExceptT do
-  _ <- runDoas helperPath ["--apply", toJsonArg req]
-  out <- runDoas helperPath ["--observe", T.unpack (syncUsername req)]
-  case decode (BL.fromStrict (encodeUtf8 out)) of
-    Nothing -> throwError (SyncVerifyMismatch "observe の出力をパースできません")
-    Just obs -> pure (compareState req obs)
+applyAndVerify helperPath req =
+  either id id <$> runExceptT do
+    _ <- runDoas helperPath ["--apply", toJsonArg req]
+    out <- runDoas helperPath ["--observe", T.unpack (syncUsername req)]
+    case decode (BL.fromStrict (encodeUtf8 out)) of
+      Nothing -> throwError (SyncVerifyMismatch "observe の出力をパースできません")
+      Just obs -> pure (compareState req obs)
 
 -- | Haskell 側で行う独立した突合（owl-user-sync の判定結果は使わない）。
 compareState :: UserSyncRequest -> ObservedState -> SyncOutcome
@@ -118,9 +119,11 @@ compareState req obs
         else SyncSucceeded
   | not (obsExists obs) = SyncVerifyMismatch "apply 後も OS アカウントが存在しない"
   | obsUid obs /= Just (syncUid req) = SyncVerifyMismatch "UID が一致しない"
-  | OsActive <- syncStatus req, sort' (obsSshKeys obs) /= sort' (syncSshKeys req) =
+  | OsActive <- syncStatus req
+  , sort' (obsSshKeys obs) /= sort' (syncSshKeys req) =
       SyncVerifyMismatch "authorized_keys が一致しない"
-  | OsSuspended <- syncStatus req, not (null (obsSshKeys obs)) =
+  | OsSuspended <- syncStatus req
+  , not (null (obsSshKeys obs)) =
       SyncVerifyMismatch "Suspended なのに authorized_keys が空になっていない"
   | otherwise = SyncSucceeded
  where
