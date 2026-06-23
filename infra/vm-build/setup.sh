@@ -204,7 +204,13 @@ EOF
 chown _runner /var/forgejo-runner/config.yml.template
 
 # rc.d サービス (オフライン登録後に自動で起動する)
-cat >/etc/rc.d/forgejo-runner <<'EOF'
+# 【重要】サービス名(= /etc/rc.d/ のファイル名)にハイフンは使えない。
+# rc.subr / rcctl は `${name}_flags` のようなシェル変数名を組み立てて
+# 参照するため、ハイフンを含む名前は不正な変数名になり、rcctl が
+# "service ... does not exist" として認識自体を拒否する(実際に発生)。
+# バイナリのパス名 (/usr/local/bin/forgejo-runner) はファイル名なので
+# ハイフンで問題ないが、サービス名は forgejo_runner (アンダースコア) にする。
+cat >/etc/rc.d/forgejo_runner <<'EOF'
 #!/bin/ksh
 daemon="/usr/local/bin/forgejo-runner"
 daemon_user="_runner"
@@ -214,7 +220,7 @@ daemon_logger="daemon.info"
 . /etc/rc.d/rc.subr
 rc_cmd $1
 EOF
-chmod 755 /etc/rc.d/forgejo-runner
+chmod 755 /etc/rc.d/forgejo_runner
 # ── オフライン Runner 登録 (Web UI 不要) ─────────────────────
 # vm-git/setup.sh で forgejo forgejo-cli actions register --labels 'openbsd,haskell'
 # が完了している前提。ラベルはその登録時点でシークレットに紐づいてサーバー側に
@@ -233,8 +239,8 @@ _ok ".runner ファイル生成"
 cp /var/forgejo-runner/config.yml.template /var/forgejo-runner/config.yml
 chown _runner /var/forgejo-runner/config.yml
 
-rcctl enable forgejo-runner
-rcctl start forgejo-runner
+rcctl enable forgejo_runner
+rcctl start forgejo_runner
 _ok "Forgejo Runner 起動"
 
 _log "Build VM セットアップ完了"
