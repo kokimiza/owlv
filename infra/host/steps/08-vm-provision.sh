@@ -96,6 +96,17 @@ _vm_provision() {
 		fi
 	fi
 
+	# vm-audit は setup.sh の末尾で自身の pf.conf を default-deny (SSH 受信不可)
+	# に切り替えて自己ロックダウンする (鉄則①: host から audit VM への能動的な
+	# 読み込み経路を持たない、infra/vm-audit/setup.sh 参照)。そのため以下の
+	# 事後 SSH 呼び出しは setup.sh 自身がロックダウン前に既に行っており、
+	# host 側から追って実行することはできない (実際に発生: ssh timeout)。
+	if [ "$vmname" = "vm-audit" ]; then
+		_log "[${vmname}] プロビジョニング完了 (完了マーカー/鍵削除は setup.sh が自己処理済み)"
+		_ok "${vmname} 完了"
+		return
+	fi
+
 	# /provision/ はこの関数の先頭で作成済みなので全 VM で存在が保証されている。
 	ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
 		"date > /provision/.owl-provisioned"

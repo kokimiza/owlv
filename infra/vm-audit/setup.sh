@@ -190,6 +190,21 @@ crontab -l 2>/dev/null | grep -v 'owl-audit-' >/tmp/owl-audit-crontab.tmp || tru
 rm -f /tmp/owl-audit-crontab.tmp
 _ok "cron 登録 (検知: 1分間隔 / 封印: 10分間隔)"
 
+# ── プロビジョニング完了処理 (ロックダウン前に自己完結させる) ──────────
+# 直後に適用する pf.conf は SSH(22) の受信を許可しないため、host/steps/08-vm-provision.sh
+# が他 VM と同様に行う「完了マーカーの書き込み」「プロビジョニング鍵の削除」を
+# SSH 経由で事後に行うことができない (実際に発生: ssh connect timed out)。
+# 鉄則① (host から audit VM への能動的な読み込み経路を持たない) は意図的な設計
+# のため、ここでロックダウン前に自分自身で済ませておく。host 側はこの VM に対して
+# のみ該当の事後 SSH 呼び出しをスキップする。
+date >/provision/.owl-provisioned
+if [ -f /root/.ssh/authorized_keys ]; then
+	grep -v 'owl-prov-' /root/.ssh/authorized_keys >/root/.ssh/ak.tmp || true
+	mv /root/.ssh/ak.tmp /root/.ssh/authorized_keys
+	chmod 600 /root/.ssh/authorized_keys
+fi
+_ok "完了マーカー配置 + プロビジョニング鍵削除 (ロックダウン前に自己処理)"
+
 # ── このVM自身の pf (防御縦深、§6.3) ─────────────────────────
 # ネットワーク層の片方向強制の本体は host/conf/pf.conf(ホスト側)であり、
 # これはあくまで二重防御。ゲスト自身も default-deny にしておく。
