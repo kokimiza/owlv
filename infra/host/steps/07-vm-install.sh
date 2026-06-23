@@ -301,6 +301,20 @@ for _vm in vm-db vm-git vm-build vm-audit vm-ap; do
 		vmctl start "$_vm" 2>/tmp/owl-prod-start.err || {
 			while read -r l; do _log "  $l"; done </tmp/owl-prod-start.err
 			rm -f /tmp/owl-prod-start.err
+			# ENOENT (vmd 側 VMD_DISK_MISSING 等) の原因特定用に、
+			# ディスクの実体と vmd 自身のログを残す。
+			case "$_vm" in
+			vm-db) _disk="/home/vmm/db.img" ;;
+			vm-git) _disk="/home/vmm/git.img" ;;
+			vm-build) _disk="/home/vmm/build.img" ;;
+			vm-audit) _disk="/home/vmm/audit.img" ;;
+			vm-ap) _disk="/home/vmm/ap.img" ;;
+			esac
+			_log "[${_vm}] disk: $(ls -l "$_disk" 2>&1)"
+			_log "[${_vm}] vmctl status:"
+			vmctl status 2>&1 | while read -r l; do _log "  $l"; done
+			_log "[${_vm}] /var/log/messages (直近 vmd/vmm ログ):"
+			grep -Ei 'vmd|vmm' /var/log/messages | tail -20 | while read -r l; do _log "  $l"; done
 			_die "[${_vm}] 本番 VM 起動に失敗"
 		}
 		rm -f /tmp/owl-prod-start.err
