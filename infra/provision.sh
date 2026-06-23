@@ -245,20 +245,24 @@ OWL_AP_IP=$(_toml "network.internal_lan" "ap_vm")
 OWL_DB_IP=$(_toml "network.internal_lan" "db_vm")
 OWL_GIT_IP=$(_toml "network.dev_lan" "git_vm")
 OWL_BUILD_IP=$(_toml "network.dev_lan" "build_vm")
+OWL_AUDIT_IP=$(_toml "network.audit_lan" "audit_vm")
 GHC_VERSION=$(_toml "toolchain" "ghc_version")
 PG_VERSION=$(_toml "app" "pg_version")
 FORGEJO_VER=$(_toml "forgejo" "version")
 FORGEJO_RUNNER_VER=$(_toml "forgejo" "runner_version")
 OWLV_ROOT_ADMIN_USERNAME=$(_toml "user" "root_admin_username")
+OWL_AUDIT_NOTIFY_WEBHOOK=$(_toml "audit" "notify_webhook_url")
 _log "設定読み込み完了:"
 _log "  OWL_RELEASE=${OWL_RELEASE}  WAN_IF=${WAN_IF}"
 _log "  internal_lan: AP=${OWL_AP_IP} DB=${OWL_DB_IP}"
 _log "  dev_lan:      Git=${OWL_GIT_IP} Build=${OWL_BUILD_IP}"
+_log "  audit_lan:    Audit=${OWL_AUDIT_IP}"
 _log "  GHC=${GHC_VERSION}  PG=${PG_VERSION}  Forgejo=${FORGEJO_VER}  Runner=${FORGEJO_RUNNER_VER}"
 
 LOGDIR=/var/log/owlv
 HOST_INT_IP="10.0.1.1"
 HOST_DEV_IP="10.0.2.1"
+HOST_AUDIT_IP="10.0.3.1"
 PROV_KEY=/etc/owlv/prov_ed25519     # プロビジョニング用の使い捨て SSH 鍵
 BACKUP_KEY=/etc/owlv/backup_ed25519 # DR 用の恒久 SSH 鍵 (owl-control.sh が使用)
 
@@ -267,15 +271,15 @@ BACKUP_KEY=/etc/owlv/backup_ed25519 # DR 用の恒久 SSH 鍵 (owl-control.sh �
 FORGEJO_RUNNER_SECRET=$(openssl rand -hex 20)
 _log "Forgejo Runner シークレット生成完了 (40 文字 hex)"
 
-export OWL_AP_IP OWL_DB_IP OWL_GIT_IP OWL_BUILD_IP \
+export OWL_AP_IP OWL_DB_IP OWL_GIT_IP OWL_BUILD_IP OWL_AUDIT_IP \
 	OWL_RELEASE GHC_VERSION PG_VERSION FORGEJO_VER FORGEJO_RUNNER_VER \
-	FORGEJO_RUNNER_SECRET OWLV_ROOT_ADMIN_USERNAME
+	FORGEJO_RUNNER_SECRET OWLV_ROOT_ADMIN_USERNAME OWL_AUDIT_NOTIFY_WEBHOOK
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo " owlv プロビジョニング! (OpenBSD ${OWL_RELEASE})"
 echo " AP:${OWL_AP_IP}  DB:${OWL_DB_IP}"
-echo " Git:${OWL_GIT_IP}  Build:${OWL_BUILD_IP}"
+echo " Git:${OWL_GIT_IP}  Build:${OWL_BUILD_IP}  Audit:${OWL_AUDIT_IP}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # ── ステップ実行 ───────────────────────────────────────────

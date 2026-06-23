@@ -77,6 +77,13 @@ jobs:
             echo "tag=${TAG}"
             echo "commit=${FORGEJO_SHA}"
             echo "uname_r=$(uname -r)"
+            # uname -r はリリース番号のみで syspatch の適用状態(パッチレベル)を
+            # 含まない。同一リリースでも syspatch 差があれば ABI 差のリスクが
+            # 残るため、稼働中カーネル本体のハッシュも記録し、AP VM 側で完全一致を
+            # 要求する (doc/dev_sec_ops.md §1.3, §4.2)。syspatch は通常 /bsd を
+            # 置き換える(差分カーネル)ため、これが両VMの syspatch 適用状態が
+            # 一致していることの代理指標になる。
+            echo "kernel_sha256=$(sha256 -q /bsd)"
             echo "ghc_version=$(ghc --numeric-version)"
             for f in owlv-app-openbsd-amd64 owlv-batch-center-openbsd-amd64 owlv-projector-openbsd-amd64; do
               echo "${f}.sha256=$(sha256 -q "$f")"

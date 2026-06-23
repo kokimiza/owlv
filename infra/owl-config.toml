@@ -19,6 +19,11 @@ subnet = "10.0.2.0/24"
 git_vm = "10.0.2.10"
 build_vm = "10.0.2.20"
 
+[network.audit_lan]
+# vswitch2: Audit VM 専用、片方向 syslog 受信のみ (§1.1, §6.1)
+subnet = "10.0.3.0/24"
+audit_vm = "10.0.3.10"
+
 [vm.ap]
 name = "vm-ap"
 memory = "512M"
@@ -43,6 +48,13 @@ name = "vm-build"
 memory = "4G"
 disk = "/home/vmm/build.img"
 size = "50G"
+
+[vm.audit]
+# ログ集約のみのため軽量 (§6)
+name = "vm-audit"
+memory = "256M"
+disk = "/home/vmm/audit.img"
+size = "10G"
 
 [toolchain]
 # GHC2024 (base ^>= 4.20) の要件を満たす最低バージョン。OpenBSD の
@@ -86,7 +98,20 @@ b2_remote = "b2:owl-dr-backup"
 rsyncnet_remote = "rsyncnet:owl-dr-backup"
 window_seconds = 300
 
-[forgejo]
+[audit]
+# §6.2: 検知トリガ(sudo連続失敗・未承認IPからのSSHログイン成功・pf.confハッシュ乖離)
+# を検出した際の外部通報先。webhook URL は未確定のため空欄 (TBD) — 確定したら
+# ここに設定し、vm-audit/setup.sh の再実行(再プロビジョニング)で配置する。
+# 空欄のままだと vm-audit 上の検知スクリプトは検知のみ行いログに記録するが、
+# 外部通報は送信しない(送信先未設定での誤爆を避けるための安全側デフォルト)。
+notify_webhook_url = ""
+# §6.1 鉄則③: 送信先ホワイトリスト固定。webhook URL のホスト名が所属する
+# プロバイダの公式 IP レンジ (CIDR) を静的に列挙する。DNS の動的解決はしない
+# (DNS リゾルバ自体の侵害・キャッシュポイズニングで送信先が書き換えられるリスク
+# を断つため)。webhook_url が決まったらプロバイダの公式ドキュメントに記載の
+# CIDR をここへ追加すること。空のままだと audit_lan の外向き443は何も通さない
+# (pf table が空 = 全遮断、これも安全側デフォルト)。
+notify_dest_cidrs = []
 version = "15.0.3"
 runner_version = "12.11.1"
 # vm-git/setup.sh が `forgejo admin repo create --owner admin --name owlv` で

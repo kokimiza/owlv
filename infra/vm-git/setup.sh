@@ -20,6 +20,7 @@ _ok() { _log "  ✓ $*"; }
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 OWL_GIT_IP="${OWL_GIT_IP:?OWL_GIT_IP is required}"
+AUDIT_IP="${OWL_AUDIT_IP:?OWL_AUDIT_IP is required}"
 FORGEJO_RUNNER_SECRET="${FORGEJO_RUNNER_SECRET:?FORGEJO_RUNNER_SECRET is required}"
 # 既定値は owl-config.toml [forgejo].version と一致させておく
 # (08-vm-provision.sh が通常はそちらを env 経由で渡す)
@@ -35,6 +36,13 @@ FORGEJO_INTERNAL_TOKEN=$(openssl rand -hex 64) # 128 文字 hex
 FORGEJO_ADMIN_PASS=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-24)
 
 _log "Git VM セットアップ開始 (${OWL_GIT_IP})"
+
+# ── syslog の Audit VM への一方通行転送 (§6.1 鉄則②) ──────────
+grep -qF "@${AUDIT_IP}" /etc/syslog.conf 2>/dev/null || {
+	printf 'auth.*\t\t\t\t\t@%s\n' "${AUDIT_IP}" >>/etc/syslog.conf
+	rcctl restart syslogd 2>/dev/null || true
+	_ok "syslog.conf に Audit VM (${AUDIT_IP}) への auth.* 転送を追加"
+}
 
 # ── パッケージ ────────────────────────────────────────────
 _log "パッケージインストール"

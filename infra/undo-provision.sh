@@ -62,7 +62,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 # ── VM を強制停止 ────────────────────────────────────────────
 _log "VM を強制停止"
-for vm in vm-ap vm-db vm-git vm-build; do
+for vm in vm-ap vm-db vm-git vm-build vm-audit; do
 	vmctl stop -f "$vm" 2>/dev/null && _ok "${vm} 停止" || _skip "${vm} (既に停止またはなし)"
 done
 
@@ -83,14 +83,15 @@ _ok "vmd クリーンアップ完了"
 _log "STEP 3: 仮想インターフェースを解除"
 
 # bridge → vether の順で destroy (bridge が vether を参照しているため)
-for iface in bridge0 bridge1 vether0 vether1; do
+for iface in bridge0 bridge1 bridge2 vether0 vether1 vether2; do
 	ifconfig "$iface" destroy 2>/dev/null && _ok "${iface} destroy" ||
 		_skip "${iface} (存在しない)"
 done
 
 # 再起動時の自動設定を無効化
 for f in /etc/hostname.vether0 /etc/hostname.bridge0 \
-	/etc/hostname.vether1 /etc/hostname.bridge1; do
+	/etc/hostname.vether1 /etc/hostname.bridge1 \
+	/etc/hostname.vether2 /etc/hostname.bridge2; do
 	rm -f "$f" && _ok "削除: $f" || _skip "$f"
 done
 
@@ -143,7 +144,7 @@ done
 # ── STEP 5: VM ディスクイメージ ──────────────────────────────
 _log "STEP 5: VM ディスクイメージ"
 if [ "$WIPE_DISKS" -eq 1 ]; then
-	for img in /home/vmm/ap.img /home/vmm/db.img /home/vmm/git.img /home/vmm/build.img; do
+	for img in /home/vmm/ap.img /home/vmm/db.img /home/vmm/git.img /home/vmm/build.img /home/vmm/audit.img; do
 		rm -f "$img" && _ok "削除: $img" || _skip "$img"
 	done
 else

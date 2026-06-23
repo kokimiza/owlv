@@ -32,8 +32,19 @@ DB_PLATFORM_ADMIN_USER="${DB_PLATFORM_ADMIN_USER:-owl_platform_admin}"
 # owl_app とは別の認証情報を使うことで、プロジェクターが乗っ取られても
 # events を書き換え/偽造できないことを Postgres 側の権限分離として保証する。
 DB_PROJECTOR_USER="${DB_PROJECTOR_USER:-owl_projector}"
+AUDIT_IP="${OWL_AUDIT_IP:?OWL_AUDIT_IP is required}"
 
 _log "DB VM セットアップ開始 (${OWL_DB_IP})"
+
+# ── syslog の Audit VM への一方通行転送 (§6.1 鉄則②) ──────────
+# auth ファシリティ(su/sudo・sshd ログイン成否)のみを転送する。仕訳金額・
+# 顧客名等のドメインデータは PostgreSQL のクエリログ(別ファシリティ)経由でしか
+# 出力されないため、auth に絞ることがマスキングの実体になる。
+grep -qF "@${AUDIT_IP}" /etc/syslog.conf 2>/dev/null || {
+	printf 'auth.*\t\t\t\t\t@%s\n' "${AUDIT_IP}" >>/etc/syslog.conf
+	rcctl restart syslogd 2>/dev/null || true
+	_ok "syslog.conf に Audit VM (${AUDIT_IP}) への auth.* 転送を追加"
+}
 
 # ── パッケージ ────────────────────────────────────────────
 # OpenBSD のパッケージは点リリースまで含めたフル版番 (例: 18.3) でしか
