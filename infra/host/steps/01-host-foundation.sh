@@ -31,6 +31,30 @@ id owl-control >/dev/null 2>&1 || useradd -s /sbin/nologin -d /nonexistent owl-c
 pkg_add age rclone 2>/dev/null && _ok "age / rclone インストール" ||
 	_info "警告: age / rclone の自動インストール失敗。後で手動実行: pkg_add age rclone"
 
+# ── リリース署名鍵 (signify, doc/dev_sec_ops.md §4.2) ─────────────
+# 【信頼の根はホストに置く】Build VM は push/PR という外部入力を直接処理する
+# Forgejo Runner の実行環境であり、攻撃面が最も広い。秘密鍵を Build VM に
+# 置くと、Build VM 侵害時に攻撃者が改ざんバイナリへ正規の署名を付与できてしまい
+# 「成果物改ざんは署名検証で検出される」という前提が崩壊する。そのためホスト
+# OS が秘密鍵を排他的に保持し、owl-control.sh sign-poll(cron 経由、5分間隔)が
+# Git VM 内の未署名リリースを検知して署名する。公開鍵は AP VM の
+# /etc/owlv/release-signify.pub へ手動配置する(age 受信者鍵と同様、最小経路)。
+install -d -m 750 /etc/owlv
+SIGNIFY_SEC=/etc/owlv/release-signify.sec
+SIGNIFY_PUB=/etc/owlv/release-signify.pub
+if [ ! -f "$SIGNIFY_SEC" ]; then
+	_log "リリース署名鍵 (signify) をホスト上に生成"
+	signify -G -n -p "$SIGNIFY_PUB" -s "$SIGNIFY_SEC" ||
+		_die "signify 鍵の生成に失敗しました"
+	chmod 600 "$SIGNIFY_SEC"
+	chmod 644 "$SIGNIFY_PUB"
+	_ok "signify 鍵をホストに生成: ${SIGNIFY_PUB}"
+	_info "AP VM の /etc/owlv/release-signify.pub へ以下を配置してください:"
+	cat "$SIGNIFY_PUB"
+else
+	_info "signify 鍵: 既存のためスキップ"
+fi
+
 # vmm-bios (SeaBIOS) — /etc/firmware/vmm-bios が無いと vmctl start が
 # "Cannot allocate memory" という誤った errno に化けて失敗する。
 # 正規の取得方法: fw_update vmm (ドライバ名。vmm-firmware パッケージをインストール)

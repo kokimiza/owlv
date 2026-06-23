@@ -8,6 +8,9 @@ set -eu
 CONFIG=/etc/owlv/infra/owl-config.toml
 KNOWN_HOSTS=/etc/owlv/known_hosts
 BACKUP_KEY=/etc/owlv/backup_ed25519
+# §4.2: リリース署名鍵はホストが排他的に保持する (Build VM には置かない)。
+# 生成は host/steps/01-host-foundation.sh で行う。
+SIGNIFY_SEC=/etc/owlv/release-signify.sec
 
 LOCKFILE=/tmp/owl-dr.lock
 LOGDIR=/var/log/owl
@@ -295,6 +298,89 @@ REMOTE
 }
 
 # ────────────────────────────────────────────────────────────
+# コマンド: sign-poll
+# §4.2: Build VM の CI (vm-git/build.yml) が draft=true で作成した「未署名」
+# リリースを検知し、ホストが排他的に保持する signify 秘密鍵で manifest.txt に
+# 署名する。署名鍵を Build VM に置かないのは、Build VM が push/PR という外部
+# 入力を直接処理し攻撃面が最も広いため — ここに鍵を置くと Build VM 侵害時に
+# 攻撃者が改ざんバイナリへ正規の署名を付与できてしまい、「成果物改ざんは署名
+# 検証で検出される」という前提(信頼の根)が崩壊する。署名後に draft=false へ
+# 切り替えることで「承認済み・未デプロイ」状態とし、deploy-poll の検知対象にする。
+# ────────────────────────────────────────────────────────────
+cmd_sign_poll() {
+	_lock
+	trap '_unlock' EXIT
+	_check_hold
+
+	[ -f "$SIGNIFY_SEC" ] || _die "署名鍵が未配置です: ${SIGNIFY_SEC}"
+	[ -f "$FORGEJO_TOKEN_FILE" ] || _die "Forgejo API トークンが未配置: ${FORGEJO_TOKEN_FILE}"
+	TOKEN="$(cat "$FORGEJO_TOKEN_FILE")"
+	GIT_IP=$(_toml "network.dev_lan" "git_vm")
+
+	RELEASES_JSON="$(curl -fsS \
+		-H "Authorization: token ${TOKEN}" \
+		"http://${GIT_IP}:3000/api/v1/repos/${FORGEJO_OWNER}/${FORGEJO_REPO}/releases?draft=true&limit=20")" ||
+		_die "Forgejo API への接続に失敗しました"
+
+	PAIRS="$(printf '%s' "$RELEASES_JSON" | tr ',' '\n' | awk '
+        /"id":/       { match($0, /"id":[0-9]+/); id = substr($0, RSTART + 5, RLENGTH - 5) }
+        /"tag_name":/ { match($0, /"tag_name":"[^"]*"/); t = substr($0, RSTART + 12, RLENGTH - 14); print id "\t" t }
+    ')"
+
+	if [ -z "$PAIRS" ]; then
+		_info "未署名 (draft) のリリースはありません"
+		_unlock
+		trap - EXIT
+		return 0
+	fi
+
+	printf '%s\n' "$PAIRS" | while IFS="$(printf '\t')" read -r rel_id tag; do
+		[ -n "$tag" ] || continue
+
+		_info "未署名リリースを検知: ${tag}"
+		TMP="$(mktemp -d /tmp/owl-sign.XXXXXX)"
+
+		if ! curl -fsS -o "${TMP}/manifest.txt" \
+			"http://${GIT_IP}:3000/${FORGEJO_OWNER}/${FORGEJO_REPO}/releases/download/${tag}/manifest.txt"; then
+			_info "警告: ${tag} の manifest.txt 取得に失敗。スキップします"
+			rm -rf "$TMP"
+			continue
+		fi
+
+		if ! signify -S -s "$SIGNIFY_SEC" -m "${TMP}/manifest.txt" -x "${TMP}/manifest.txt.sig"; then
+			_info "警告: ${tag} の署名に失敗。スキップします"
+			rm -rf "$TMP"
+			continue
+		fi
+
+		if ! curl -fsS -X POST \
+			-H "Authorization: token ${TOKEN}" \
+			-F "attachment=@${TMP}/manifest.txt.sig" \
+			"http://${GIT_IP}:3000/api/v1/repos/${FORGEJO_OWNER}/${FORGEJO_REPO}/releases/${rel_id}/assets?name=manifest.txt.sig" >/dev/null; then
+			_info "警告: ${tag} の manifest.txt.sig 添付に失敗。スキップします"
+			rm -rf "$TMP"
+			continue
+		fi
+
+		if ! curl -fsS -X PATCH \
+			-H "Authorization: token ${TOKEN}" \
+			-H "Content-Type: application/json" \
+			-d '{"draft":false}' \
+			"http://${GIT_IP}:3000/api/v1/repos/${FORGEJO_OWNER}/${FORGEJO_REPO}/releases/${rel_id}" >/dev/null; then
+			_info "警告: ${tag} の draft 解除に失敗しました(署名は完了済み。手動で確認してください)"
+			rm -rf "$TMP"
+			continue
+		fi
+
+		rm -rf "$TMP"
+		_info "署名完了・公開: ${tag}"
+	done
+
+	_unlock
+	trap - EXIT
+}
+
+# ────────────────────────────────────────────────────────────
 # コマンド: deploy-poll
 # §4.2: PR の Approve & Merge をトリガに Forgejo Runner が自動生成した
 # 「承認済み」リリースを定期照会し、未デプロイのものを検知したら deploy する。
@@ -397,6 +483,7 @@ deploy)
 	shift
 	cmd_deploy "$@"
 	;;
+sign-poll) cmd_sign_poll ;;
 deploy-poll) cmd_deploy_poll ;;
 status) cmd_status ;;
 *)
@@ -404,6 +491,7 @@ status) cmd_status ;;
 	echo "  dr-export          — DR アーカイブを生成してクラウドに送出" >&2
 	echo "  basebackup         — pg_basebackup をローカルに保存" >&2
 	echo "  deploy <tag>       — owlv バイナリを AP VM にデプロイ" >&2
+	echo "  sign-poll          — 未署名(draft)のリリースを検知してホスト鍵で署名" >&2
 	echo "  deploy-poll        — 承認済み未デプロイのリリースを検知して自動デプロイ" >&2
 	echo "  status             — VM / DB の稼働状態を確認" >&2
 	exit 1

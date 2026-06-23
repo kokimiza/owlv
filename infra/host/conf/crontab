@@ -1,11 +1,19 @@
 # /etc/crontab — ホスト OS タスクスケジューラ
-# §2.2: 深夜 DR 射出。§2.1 L1: 週次ベースバックアップ。§5: 日次改ざん検知。§4.2: デプロイ承認ポーリング。
+# §2.2: 深夜 DR 射出。§2.1 L1: 週次ベースバックアップ。§5: 日次改ざん検知。
+# §4.2: マニフェスト署名ポーリング・デプロイ承認ポーリング。
 
 SHELL=/bin/sh
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
 
-# デプロイ承認ポーリング (§4.2) — 5分間隔。PR の Approve & Merge で
-# Forgejo Runner が生成した承認済みリリースを検知し、未デプロイなら自動デプロイする。
+# マニフェスト署名ポーリング (§4.2) — 5分間隔、deploy-poll より2分早い offset。
+# Build VM の CI が draft=true で作成した未署名リリースを検知し、ホストが
+# 排他的に保持する signify 秘密鍵で manifest.txt に署名して draft=false にする。
+# deploy-poll より先に走らせることで、署名済みになったリリースを同じ周期内で
+# deploy-poll が検知できる。
+2-59/5  *  *  *  *  owl-control  /usr/local/sbin/owl-control.sh sign-poll >> /var/log/owlv/sign.log 2>&1
+
+# デプロイ承認ポーリング (§4.2) — 5分間隔。sign-poll が署名し draft=false に
+# 切り替えた「承認済み」リリースを検知し、未デプロイなら自動デプロイする。
 */5  *  *  *  *  owl-control  /usr/local/sbin/owl-control.sh deploy-poll >> /var/log/owlv/deploy.log 2>&1
 
 # 週次 ベースバックアップ (§2.1 L1) — 日曜 01:00

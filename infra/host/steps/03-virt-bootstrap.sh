@@ -68,6 +68,27 @@ chmod 640 /etc/hostname.bridge1
 
 _ok "vether0+bridge0 (${HOST_INT_IP}) / vether1+bridge1 (${HOST_DEV_IP}) 設定"
 
+# ── bridge を通過する L2 トラフィックを pf に必ず通す (dev_sec_ops.md §1.3) ──
+# OpenBSD の bridge(4) は既定で同一スイッチ内のフレームを pf を経由せず直接
+# スイッチングする場合がある。internal_lan(AP/DB)・dev_lan(Git/Build)のように
+# 1 スイッチに複数ゲストを収容するため、これを有効にしない限り同一スイッチ内の
+# ゲスト間通信が pf.conf のルール記述と無関係に成立してしまう。
+_log "bridge の L2 トラフィックを pf 評価対象にする sysctl を設定..."
+_BRIDGE_PFIL_SYSCTL='
+net.link.bridge.pfil_member=1
+net.link.bridge.pfil_bridge=1
+'
+sed -i '/^# owl-bridge-pfil sysctl (dev_sec_ops.md §1.3)$/,$d' /etc/sysctl.conf 2>/dev/null || true
+{
+	echo "# owl-bridge-pfil sysctl (dev_sec_ops.md §1.3)"
+	printf '%s\n' "$_BRIDGE_PFIL_SYSCTL"
+} >>/etc/sysctl.conf
+printf '%s\n' "$_BRIDGE_PFIL_SYSCTL" | while IFS='=' read -r _k _v; do
+	[ -n "$_k" ] || continue
+	sysctl "${_k}=${_v}"
+done
+_ok "bridge pfil_member/pfil_bridge 設定 (/etc/sysctl.conf に永続化 + 即時反映)"
+
 # vmd をスイッチのみの最小 config で起動する
 # ディスクイメージ参照を含む完全な vm.conf は STEP 7 (VM OS autoinstall) で配置する
 _log "最小 vm.conf (スイッチ定義のみ) を書き込み..."
