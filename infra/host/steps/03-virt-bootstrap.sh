@@ -109,6 +109,20 @@ printf '%s\n' "$_BRIDGE_PFIL_SYSCTL" | while IFS='=' read -r _k _v; do
 done
 _ok "bridge pfil_member/pfil_bridge 設定 (/etc/sysctl.conf に永続化 + 即時反映)"
 
+# ── tap デバイスノード ──────────────────────────────────────
+# インストーラーの既定 MAKEDEV は tap0-tap3 の 4 個しか用意しない。
+# vmd は VM ごとのネットワークインターフェースに tap を 1 個ずつ消費するため、
+# VM が 5 台 (ap/db/git/build/audit) になると 5 個目の tap4 が無く
+# "config_setvm: can't open /dev/tap4" で起動に失敗する。将来の VM 追加分も
+# 見込んで余裕を持って作成する。
+_log "/dev/tap0-7 の存在を確認・作成..."
+(
+	cd /dev && for _n in 0 1 2 3 4 5 6 7; do
+		[ -c "tap${_n}" ] || ./MAKEDEV "tap${_n}"
+	done
+) || _die "/dev/tapN デバイスノードの作成に失敗"
+_ok "/dev/tap0-7 準備完了"
+
 # vmd をスイッチのみの最小 config で起動する
 # ディスクイメージ参照を含む完全な vm.conf は STEP 7 (VM OS autoinstall) で配置する
 _log "最小 vm.conf (スイッチ定義のみ) を書き込み..."
