@@ -1,0 +1,8 @@
+# Normalize all text files to LF, regardless of OS or local git config.
+* text=auto eol=lf
+
+*.sh text eol=lf
+/infra/host/sbin/owl-pfctl-pinhole text eol=lf
+/infra/host/conf/crontab text eol=lf
+/infra/vm-db/ssl/PLACEHOLDER text eol=lf
+Dockerfile text eol=lf
