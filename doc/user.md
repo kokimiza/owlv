@@ -4,25 +4,25 @@
 
 owlv における「ユーザー」は二つの世界に同時に存在する。
 
-1. **OS（OpenBSD・AP VM）側のアカウント** — SSH ログインの実体。[infra/vm-ap/setup.sh](../infra/vm-ap/setup.sh) の `add-owl-operator` / `add-owl-maintainer` で、保守者が手動で `useradd` している。
-2. **owlv アプリ側のユーザー** — 画面アクセス制御（[src/Core/Domain/OrgPermission.hs](../src/Core/Domain/OrgPermission.hs) の `PermScope`）や仕訳の入力者・承認者識別（[ifrs_standard.md](ifrs_standard.md) §2.1.1 486行）に必要だが、**現状は存在しない**。`Shell.Interpreters.UserContext.runUserCtxPg` は RLS 用の `app.current_user` を文字列でセットするだけで、その文字列の正当性を誰も検証していない（[src/Shell/TUI/Submit.hs](../src/Shell/TUI/Submit.hs) は `runUserCtxFixed "system"` 固定、[batch/Batch/Env.hs](../batch/Batch/Env.hs) は `"batch"` 固定）。
+1. **OS（OpenBSD・AP VM）側のアカウント** — SSH ログインの実体。現在は [infra/vm-ap/setup.sh](../infra/vm-ap/setup.sh) が `/usr/local/sbin/owl-user-sync` を配置し、アプリ側の `User` 射影から一方向に同期する。
+2. **owlv アプリ側のユーザー** — [src/Core/Domain/User.hs](../src/Core/Domain/User.hs) の `User` として実装済み。OSユーザー名そのものを `UserId` とし、Tenantごとの `Role`、画面スコープ、SSH公開鍵、OS同期状態をイベントソースで管理する。
 
-この文書は、上記2つを**Haskell側のUserマスタを単一の真実源（Single Source of Truth）として一方向に統合する**基本設計を定める。dev_sec_ops.md・vm-ap/setup.sh への実装反映は別タスクとし、ここでは設計のみを確定する。
+この文書は、上記2つを**Haskell側のUserマスタを単一の真実源（Single Source of Truth）として一方向に統合する**基本設計と、現在の実装状態を定める。Core/Shell 側の主要実装は入っており、残る差分は §6 にまとめる。
 
 ## 1. 課題（現状の二重管理リスク）
 
 | リスク | 現状の原因 |
 |---|---|
 | 退職者の OS アカウントだけ残る | OS 側の削除は保守者が手動で行う別作業であり、アプリ側に削除を知らせる経路がない |
-| アプリ側ユーザーだけ残り、SSH 不可なのに画面権限が有効に見える | アプリにユーザーという概念自体が存在しない |
-| 「誰が起票したか」を `app.current_user` の生文字列に依存している | OS ログインユーザー名がそのまま信用されており、失効・改名・なりすましを検出できない |
-| 権限変更が二箇所（`usermod -G` とアプリ内 ACL）に分散し、整合性確認の手段がない | 単一の状態機械が存在しない |
+| アプリ側ユーザーだけ残り、SSH 不可なのに画面権限が有効に見える | `UserStatus` と OS 同期結果イベントで検出する必要がある |
+| 「誰が起票したか」を `app.current_user` の生文字列に依存している | 起動時の OS ログイン名照合は実装済みだが、TUI の一部 submit 経路はまだ固定 user context を使う |
+| 権限変更が二箇所（`usermod -G` とアプリ内 ACL）に分散し、整合性確認の手段がない | Core の User 射影を真実源にし、OS 側は `owl-user-sync` による投影として扱う |
 
 方針は一つ：**ユーザーのライフサイクル（作成・権限変更・停止・削除）はすべて owlv アプリ内のコマンドとして発行し、OS 側はその投影（projection）として一方向に同期される。** OS 側で直接 `useradd`/`userdel` を打つ運用は廃止する。
 
 ## 2. ドメインモデル（Core）
 
-新規アグリゲート `User` を [src/Core/Domain/User.hs](../src/Core/Domain/User.hs) に追加する（CLAUDE.md の「Recipe for adding a feature」に従う）。
+`User` は [src/Core/Domain/User.hs](../src/Core/Domain/User.hs) に実装済み（CLAUDE.md の「Recipe for adding a feature」に従い、`Core.Command` / `Core.Event` / `Core.Decide` / `Core.Evolve` / `test/Core/UserSpec.hs` まで接続済み）。
 
 ```haskell
 newtype UserId = UserId Text  -- = OS ユーザー名そのもの（後述、不変）
@@ -39,22 +39,24 @@ data UserStatus
   | Removed     -- 削除済み（終端状態、復活は新規 UserId で）
 
 data User = User
-  { userId        :: UserId
+  { userId          :: UserId
+  , userOsUid       :: OsUid
   , userDisplayName :: Text
-  , userRole      :: Role
-  , userStatus    :: UserStatus
-  , userScopes    :: [PermScope]       -- 既存 Core.Domain.OrgPermission を再利用
+  , userHomeTenant  :: TenantId
+  , userTenantRoles :: Map TenantId Role
+  , userStatus      :: UserStatus
+  , userScreenScopes :: [Text]
   , userPasswordHash :: Maybe Text     -- Argon2id ハッシュ。§3 参照。SSH 認証には使わない
-  , userSshPubKeys :: [Text]           -- authorized_keys に展開する公開鍵（§2.4 のオプション禁止を適用済みのもののみ）
+  , userSshPubKeys   :: [SshPubKey]    -- authorized_keys に展開する公開鍵（オプション禁止を適用済み）
   }
 ```
 
 **全コマンドは発行者 (`actor :: UserId`) を必須項目として持つ。** これが欠けると「誰が起票したか」を求める ifrs_standard.md §2.1.1 の要件をユーザー管理自身が満たさないという自己矛盾になる。`decide` は次を強制する：
 
-- `actor` は `Status == Active` かつ `Role == Admin` でなければ `CreateUser`/`ChangeUserRole`/`RemoveUser` 等の管理コマンドを `decide` が拒否する（権限のない/失効済みアクターによる発行をブロック）。
+- `actor` は `Status == Active` かつホームTenantで `Role == Admin` でなければ `CreateUser`/`ChangeUserRole`/`RemoveUser` 等の管理コマンドを `decide` が拒否する（権限のない/失効済みアクターによる発行をブロック）。
 - `ChangeUserRole _ Admin`（Admin への昇格）は単独の `decide` 承認では `Active` にならず、**二人目の Admin による `ApproveRoleEscalation` を追加で要求する**（dual control）。実装は既存 [Core/Domain/JudgmentLog.hs](../src/Core/Domain/JudgmentLog.hs) の判断ログ機構を流用し、最高権限への昇格を単独行為にしない。
 
-**Admin の最初の1人（鶏卵問題の解決）**：`decide` にブートストラップ例外は設けない。代わりに、`Admin` ロールを持てる `UserId` は **`owl-config.toml` に静的に記載された1つの予約済みユーザー名（`[user] root_admin_username`）のみ**とし、その専用 OS アカウントは従来通り [infra/provision.sh:14-20](../infra/provision.sh#L14-L20) の手順（保守者が物理コンソール/初回 SSH で `useradd`/`usermod -G wheel`）で作る。owlv アプリは「`root_admin_username` と一致する `UserId` で SSH 接続が確立した（§4.1）」場合に限り、`User` 射影が存在しなくてもその場で `Admin`・`Active` な `User` を自動生成する（唯一の自己ブートストラップ経路）。それ以外の `UserId` は `actor` に既存 Admin を要求する通常ルールのまま。つまり **Admin への昇格経路は「専用ユーザーを `usermod` で作り、そのユーザーで SSH した時だけ」の1本に絞る。** これにより `CreateUser`/`ChangeUserRole _ Admin` 経由でAdminを増やす一般ルートと、最初の1人だけの特例ルートが明確に分離される。
+**Admin の最初の1人（鶏卵問題の解決）**：`Shell.UserOps.resolveSessionUser` は、Active Admin が0人で、OSログイン名が `OWLV_ROOT_ADMIN_USERNAME` と一致する場合に限り、`defaultTenantId` を ensure したうえで同名の Admin User を作成する。Core の `decide` 側にも「Active Admin が0人なら初回作成を許す」分岐があり、2人目以降は通常の Admin actor を要求する。
 
 ### 2.1 不変条件（`decide` に実装）
 
@@ -71,18 +73,18 @@ data User = User
 
 | Command | Event |
 |---|---|
-| `CreateUser UserId DisplayName Role [PermScope]` | `UserCreated` |
-| `ChangeUserRole UserId Role` | `UserRoleChanged` |
-| `GrantUserScope UserId PermScope` / `RevokeUserScope UserId PermScope` | `UserScopeGranted` / `UserScopeRevoked` |
-| `SetUserPasswordHash UserId Text` | `UserPasswordChanged` |
-| `RegisterUserSshKey UserId Text` | `UserSshKeyRegistered` |
-| `SuspendUser UserId` | `UserSuspended` |
-| `ReactivateUser UserId` | `UserReactivated` |
-| `RemoveUser UserId` | `UserRemoved` |
+| `CreateUser actor target displayName homeTenant role [screenScope]` | `UserCreated target osUid displayName homeTenant role [screenScope]` |
+| `ChangeUserRole actor target role` | `UserRoleChanged target role` |
+| `ProposeRoleEscalation actor target` / `ApproveRoleEscalation actor target` | `UserRoleEscalationProposed` / `UserRoleChanged target Admin` |
+| `GrantUserTenantAccess actor target tenant role` / `RevokeUserTenantAccess actor target tenant` | `UserTenantAccessGranted` / `UserTenantAccessRevoked` |
+| `GrantUserScope actor target scope` / `RevokeUserScope actor target scope` | `UserScopeGranted` / `UserScopeRevoked` |
+| `SetUserPasswordHash actor target hash` | `UserPasswordChanged` |
+| `RegisterUserSshKey actor target key` | `UserSshKeyRegistered` |
+| `SuspendUser actor target` / `ReactivateUser actor target` / `RemoveUser actor target` | `UserSuspended` / `UserReactivated` / `UserRemoved` |
 | *(Shell が OS 同期結果を反映する内部イベント、後述§4)* | `UserOsSyncSucceeded` / `UserOsSyncFailed` / `UserOsDriftDetected` |
 | *(Shell が SSH ログインを観測した結果、後述§5)* | `UserLoginObserved` |
 
-`evolve` はこれらを `User` の射影に畳み込む。`decide` には新規 5 つの不変条件チェックを追加し、CLAUDE.md の指示通り各ブランチに property test（特に「`Pending` 以外からの `UserCreated` 再発行を拒否」「`Removed` からの遷移をすべて拒否」）を書く。
+`evolve` はこれらを `UserBook` の射影に畳み込む。`test/Core/UserSpec.hs` は初回ブートストラップ、Admin dual control、Removed 終端、SSH鍵検証、本人/Admin操作、UID単調増加を検証する。
 
 ### 2.3 パスワードの位置づけ（誤解しやすい点）
 
@@ -90,7 +92,7 @@ vm-ap の sshd 設定（[infra/vm-ap/setup.sh:101](../infra/vm-ap/setup.sh#L101)
 
 `userPasswordHash` の用途は、ifrs_standard.md §2.1.1 が要求する「入力者と承認者による内容確認」（486行）のような**アプリ内のステップアップ確認**（例：承認操作の直前に本人確認として再入力させる）に限定する。ネットワークを跨がず、既に確立済みの SSH/TUI セッション内でのみ検証されるため、新たな攻撃面を増やさない。
 
-イベントストアは append-only で恒久保存されるため、ハッシュであっても永久に残る点に注意する。Argon2id のコストパラメータを将来的に強化する際、過去イベントのハッシュは旧パラメータのまま残る（再ハッシュできない）。これは許容するが、**パスワード関連イベントだけ別の鍵で暗号化されたカラムに退避する**選択肢も§7で未決事項として残す（ブラスト半径を会計イベントと分離する意味がある）。
+イベントストアは append-only で恒久保存されるため、ハッシュであっても永久に残る点に注意する。Argon2id のコストパラメータを将来的に強化する際、過去イベントのハッシュは旧パラメータのまま残る（再ハッシュできない）。これは許容する。§7 の決定により、現時点ではパスワード関連イベントを別ストアへ分離しない。
 
 ## 3. OS 側との同期（一方向プロジェクション、ただし"言ったことを信じない"）
 
@@ -120,7 +122,7 @@ vm-ap の sshd 設定（[infra/vm-ap/setup.sh:101](../infra/vm-ap/setup.sh#L101)
 
 ### 3.1 `owl-user-sync`（新規ヘルパー、既存スクリプトの統合）
 
-[infra/vm-ap/setup.sh](../infra/vm-ap/setup.sh) の `add-owl-operator` / `add-owl-maintainer`（58–85行）を、引数駆動・冪等な単一ヘルパー `/usr/local/sbin/owl-user-sync` に統合し置き換える。
+[infra/vm-ap/setup.sh](../infra/vm-ap/setup.sh) は、引数駆動・冪等な単一ヘルパー `/usr/local/sbin/owl-user-sync` を配置する。Shell 側は [src/Shell/Interpreters/UserOsSync.hs](../src/Shell/Interpreters/UserOsSync.hs) で `apply -> observe -> verify` を実行する。
 
 ```sh
 # 例: owlv-app が doas 経由で呼ぶ
@@ -157,7 +159,7 @@ permit nopass owlv-app cmd /usr/local/sbin/owl-user-sync
 
 1. `whoami` で `osUser` を取得
 2. `User` 射影を `osUser` で検索。存在しない、または `Status /= Active` なら **TUI を起動せず即終了**（OS 側でロックし忘れていても、アプリ側がもう一段の門番になる）
-3. 一致すれば `UserLoginObserved UserId Timestamp SourceIp` を追記し、`runUserCtxPg` の `uid` にこの `UserId` を使う（現状の `"system"`/`"batch"` 固定をここで置き換える）
+3. 一致すれば `UserId`・現在Tenantでの `Role`・`TenantId` を `runTUI` に渡す。`UserLoginObserved UserId Timestamp SourceIp` の追記と、仕訳 submit 経路の `runUserCtxFixed "system"` 置換は残課題（§6）。
 
 これにより RLS の `app.current_user` が初めて「検証済みの owlv ユーザー」に紐づく。
 
@@ -190,19 +192,16 @@ permit nopass owlv-app cmd /usr/local/sbin/owl-user-sync
              Removed（終端）
 ```
 
-## 6. 既存コードへの接続点（実装時の参照）
+## 6. 残課題
 
-- `src/Core/Domain/User.hs` 新規、CLAUDE.md の Recipe に従い `Core/Command.hs` / `Core/Event.hs` / `Core/Decide.hs` / `Core/Evolve.hs` に分岐追加
-- `Core.Domain.OrgPermission.PermScope` はそのまま再利用（`User` が持つ）
-- `Shell/Interpreters/UserContext.hs` の `runUserCtxPg` 呼び出し元を、固定文字列から §4.1 の検証済み `UserId` に置き換える
-- 新規 `Shell/Interpreters/UserOsSync.hs`（§3 の effect）
-- `infra/vm-ap/setup.sh` の `add-owl-operator`/`add-owl-maintainer` を `owl-user-sync` 配置に置き換える（実装タスク、本書はその設計確定のみ）
+- 残課題: `Shell.TUI.Submit` の `runUserCtxFixed "system"` を、`AppState.appCurrentUser` 由来の検証済み `UserId` に置き換える。
+- 残課題: `UserLoginObserved` の追記と `owlv-batch-center user-sync-verify` ジョブ。
 
 ## 7. 決定事項
 
 以下は当初「未決事項」としていたが、運用者が少数（＝関係者全員の動きを把握できる規模）であることを前提に、シンプルさを優先して確定する。将来チームが拡大した場合は再検討する。
 
-- **Admin 役割の発行経路**：§2 で確定済み。`owl-config.toml` の `[user] root_admin_username` に指定した専用 OS アカウントを `usermod -G wheel` で作り、**そのユーザー名で SSH 確立した時にのみ** owlv 側が自動的に `Admin`・`Active` な `User` を生成する。これ以外の経路で Admin は生まれない。
+- **Admin 役割の発行経路**：§2 で確定済み。最初の Admin は `OWLV_ROOT_ADMIN_USERNAME` に指定した専用 OS アカウントで SSH 確立した時にのみブートストラップされる。2人目以降の Admin は、既存 Admin による `ProposeRoleEscalation` と、別 Admin による `ApproveRoleEscalation` の dual control でのみ生まれる。`ChangeUserRole _ _ Admin` による直接昇格は許可しない。
 - **ドリフト検知・`pkill` 失敗の通知先**：専用のアラート基盤は新設しない。cron_batch.md と同じ仕組み（`/var/log/owlv/` への記録 + ジョブが非ゼロ終了することで OpenBSD cron の標準動作である root 宛メールに乗せる）に統合する。少数運用ではログ監視と cron メールの目視で十分であり、新規の通知経路は過剰投資と判断する。
 - **パスワード関連イベントの保存先分離**：分離しない。会計イベントと同じイベントストアにそのまま記録する。`userPasswordHash` は SSH 認証の代替ではなくアプリ内ステップアップ確認専用（§2.3）であり価値の低い標的のため、別ストアを設けるコストに見合わない。Argon2id パラメータ更新時に旧イベントが追従しない点は許容する。
 - **`pkill -u` の射程**：意図的に同一 OS ユーザー名の全セッションを対象とする。`Suspended`/`Removed` は「この身元によるアクセスを今すぐ全部止める」ことが目的であり、ForceCommand 経由か生シェルかという経路の違いで扱いを分けない。Operator/Maintainer の区別なく一括切断する。
