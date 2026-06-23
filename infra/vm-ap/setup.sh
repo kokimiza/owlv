@@ -240,8 +240,12 @@ ChallengeResponseAuthentication no
 AllowGroups owl-operators owl-maintainers
 
 # 運用グループ: owlv を直接起動、シェルアクセスを禁止
+# PermitTTY yes は既定値だが、Brick の描画には PTY 割り当てが必須であり、
+# ForceCommand によるシェル到達禁止と PTY 許可が別軸であることを明示するため
+# 意図を込めて明記する (dev_sec_ops.md §1.2)。
 Match Group owl-operators
     ForceCommand /usr/local/bin/owl-session
+    PermitTTY yes
     AllowAgentForwarding no
     AllowTcpForwarding no
     PermitTunnel no
@@ -250,6 +254,7 @@ Match Group owl-operators
 
 # 保守グループ: 通常の ksh シェル、転送は禁止
 Match Group owl-maintainers
+    PermitTTY yes
     AllowAgentForwarding no
     AllowTcpForwarding no
     PermitTunnel no
