@@ -218,6 +218,11 @@ daemon="/usr/local/bin/forgejo-runner"
 daemon_user="_runner"
 daemon_flags="daemon --config /var/forgejo-runner/config.yml"
 daemon_logger="daemon.info"
+# forgejo-runner daemon は自分自身をデーモン化(fork+detach)しない。rc_bg を
+# 立てないと rc.subr は子プロセスが detach するのを待ち続け、フォアグラウンドで
+# 動き続ける forgejo-runner に対して毎回 daemon_timeout 一杯まで待って失敗する
+# (vm-git/setup.sh の forgejo rc.d スクリプトと同種の問題、実際に発生)。
+rc_bg="YES"
 
 . /etc/rc.d/rc.subr
 rc_cmd $1
