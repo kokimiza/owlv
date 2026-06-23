@@ -61,7 +61,29 @@ FCIS は「純粋か副作用ありか」という1本の境界線でレイヤ�
 - **CQRS リードモデル**：`owlv-projector` が実装済み。PostgreSQL の `LISTEN/NOTIFY` と最大2秒ポーリングで差分を取り込み、SQLite の `view_journal_entry` / `view_account_balance` を更新する。固定資産・ECL・判断ログ・KPI ビューは今後追加。
 - **マルチテナント/ユーザー管理**：Tenant stream / Identity stream、RLS、OS ログイン名の User 射影照合、`owl-user-sync` 経由の OS 同期オーケストレーションが実装済み。Tenant 切替 UI やユーザー同期検証バッチは今後の拡張。
 - **九フェーズ月次クローズ・バッチ（spec §1.2 / §4）**：`owlv-batch-center daily-close` というCLIの形は存在するが、[batch/Batch/DailyClose.hs](batch/Batch/DailyClose.hs) の実体は `pure ExitSuccess` のみで未実装（`TODO` コメントが残っている）。`wal-ship`・`vacuum-check` も同様にスタブ。
-- **本番運用基盤（OpenBSD VM・エアギャップDR・Yubikey認証等）**：[doc/dev_sec_ops.md](doc/dev_sec_ops.md) に設計として詳述されており、`infra/` 配下にそれに対応するプロビジョニングスクリプト・設定ファイル一式（`pf.conf`、`vmd.conf`、各 VM の `setup.sh` など）が存在する。これは設計と一致した実体のあるコードであり、アプリケーション本体とは独立した運用面のレイヤー。
+- **本番運用基盤（OpenBSD VM・エアギャップDR・Yubikey認証等）**：[doc/dev_sec_ops.md](doc/dev_sec_ops.md) に設計として詳述されており、`infra/` 配下にそれに対応するプロビジョニングスクリプト・設定ファイル一式（`pf.conf`、`vmd.conf`、各 VM の `setup.sh` など）が存在する。アプリケーション本体とは独立した運用面のレイヤーで、大部分は設計と一致した実体のあるコードだが、一致していない箇所もある（詳細は下表）。
+
+### `infra/` の設計適合状況（`doc/dev_sec_ops.md` 対比、2026年6月時点の実コード調査）
+
+| doc 節 | 項目 | 状態 | 根拠 / 補足 |
+|---|---|:---:|---|
+| §1.1 | 3つの仮想スイッチ(internal_lan / dev_lan / audit_lan) | △ | internal_lan・dev_lan は `host/conf/vmd.conf` 等に実装済みだが、`audit_lan`(10.0.3.0/24)と Audit VM は `infra/` に該当ディレクトリ・設定が一切存在しない |
+| §1.1.1 | antispoof の代替となる VM IP 明示の手動 pf ルール | ○ | `host/conf/pf.conf` に各 VM の固定 IP を指定した `pass`/`block` ルールあり |
+| §1.3 | `net.link.bridge.pfil_member` / `pfil_bridge` sysctl | × | `infra/` 全体を検索しても該当 sysctl 設定が無い。設定しない限り同一スイッチ内の L2 トラフィックが `pf` を経由せずスイッチングされ得る |
+| §1.2 | AP VM sshd 緊縛(`ForceCommand`/`AllowAgentForwarding no` 等) | ○ | [infra/vm-ap/setup.sh:244-255](infra/vm-ap/setup.sh) |
+| §1.2 | `PermitTTY yes` の明示 | × | `vm-ap/setup.sh` の sshd 設定に記載なし。OpenSSH の既定値に依存している |
+| §1.3 | OS リリース / syspatch のロックステップ | △ | リリース一致(`uname -r`)の検証は実装済みだが、syspatch パッチレベルの記録・突合は `infra/` 内に見当たらない |
+| §1.3 | ディスク配置(`/home/vmm/`)と空き容量チェック | ○ | [infra/host/steps/05-disks.sh](infra/host/steps/05-disks.sh)、`provision.sh` の `_require_free_space` |
+| §1.5 | RLS / `pg_hba.conf`(SCRAM-SHA-256 + TLS) | ○ | [infra/vm-db/pg_hba.conf](infra/vm-db/pg_hba.conf)、`postgresql.conf` |
+| §2.1–2.2 | DR パイプライン(age 暗号化・RAM ディスク・ピンホール・二重射出・ゼロクリア) | ○ | [infra/host/sbin/owl-control.sh](infra/host/sbin/owl-control.sh) `cmd_dr_export`、`owl-pfctl-pinhole` |
+| §3.1 | GHC バージョン下限の事後検証 | ○ | [infra/vm-build/setup.sh](infra/vm-build/setup.sh) |
+| §4.2 | signify 鍵生成 | ○ | `vm-build/setup.sh`(ただし鍵の配置場所は次項のとおり設計と異なる) |
+| §4.2 | ホスト側 signing(Build VM に秘密鍵を置かない設計) | × | 実装は `vm-git/build.yml` が Build VM 上の `release-signify.sec` で直接署名しており、ドキュメントが要求する「署名鍵はホストが排他保持し Build VM には置かない」という信頼の根の設計と逆行している。`owl-control.sh` に `sign-poll` 相当のコマンドは存在しない |
+| §4.2 | デプロイ時三重検証(signify署名 / `uname -r` / SHA256) | ○ | `owl-control.sh` `cmd_deploy` |
+| §5 | 改ざん検知(ハッシュツリー突合・自動処理停止) | ○ | [infra/host/sbin/owl-integrity-check.sh](infra/host/sbin/owl-integrity-check.sh) |
+| §6 | Audit VM(検知・隔離・外部通報) | × | `vm-audit/` ディレクトリ自体が存在しない。§1.1 の audit_lan 未実装と表裏一体 |
+
+凡例: ○=設計通り実装済み / △=部分実装または差異あり / ×=未実装。§1.3 の ECC メモリ要件、§2.3 の鍵エスクロー(オフライン保管・金庫・遠隔地封緘)はハードウェア調達・物理運用手順であり、コード化の対象外として本表から除外した。
 
 ## 開発環境
 
