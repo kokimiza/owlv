@@ -34,6 +34,10 @@ FORGEJO_STATIC_ROOT="/usr/local/share/forgejo"
 FORGEJO_SECRET_KEY=$(openssl rand -hex 32)     # 64 文字 hex
 FORGEJO_INTERNAL_TOKEN=$(openssl rand -hex 64) # 128 文字 hex
 FORGEJO_ADMIN_PASS=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-24)
+# Forgejo は "admin" を /admin Web UI ルートと衝突する予約ユーザー名として
+# 拒否する (CreateUser: name is reserved [name: admin])。CLI サブコマンドの
+# "forgejo admin user ..." の "admin" とは無関係 — そちらはそのままで良い。
+FORGEJO_ADMIN_USER="owlv-admin"
 
 _log "Git VM セットアップ開始 (${OWL_GIT_IP})"
 
@@ -219,11 +223,11 @@ done
 [ "$i" -lt 30 ] || _die "Forgejo DB の初期化がタイムアウトしました"
 _ok "Forgejo DB 初期化確認"
 
-_log "管理者ユーザー作成 (admin)"
+_log "管理者ユーザー作成 (${FORGEJO_ADMIN_USER})"
 su -m git -c "forgejo admin user create \
-	--username admin \
+	--username ${FORGEJO_ADMIN_USER} \
 	--password '${FORGEJO_ADMIN_PASS}' \
-	--email admin@localhost \
+	--email ${FORGEJO_ADMIN_USER}@localhost \
 	--admin \
 	--must-change-password \
 	--config ${FORGEJO_DATA}/custom/conf/app.ini" 2>&1 | while read -r l; do _info "$l"; done
@@ -234,7 +238,7 @@ su -m git -c "forgejo admin user create \
 # "user does not exist [uid: 0, name: admin]" で失敗。終了コードではなく
 # 実在そのものを確認してから先に進む。
 su -m git -c "forgejo admin user list --config ${FORGEJO_DATA}/custom/conf/app.ini" |
-	grep -qw admin || _die "admin ユーザーが存在しません (作成に失敗した可能性。上記ログを確認してください)"
+	grep -qw "${FORGEJO_ADMIN_USER}" || _die "${FORGEJO_ADMIN_USER} ユーザーが存在しません (作成に失敗した可能性。上記ログを確認してください)"
 _ok "管理者ユーザー"
 
 # オフライン Runner 登録: ネットワークハンドシェイク不要、共有シークレットのみ使用
@@ -259,7 +263,7 @@ _ok "Runner vm-build 登録完了"
 # /etc/owlv/forgejo_token へ書き込む)。
 _log "ボットトークンを発行"
 BOT_TOKEN=$(su -m git -c "forgejo admin user generate-access-token \
-	--username admin --token-name 'owlv-bot-$(date +%s)' --scopes write:repository --raw \
+	--username ${FORGEJO_ADMIN_USER} --token-name 'owlv-bot-$(date +%s)' --scopes write:repository --raw \
 	--config ${FORGEJO_DATA}/custom/conf/app.ini") ||
 	_die "ボットトークンの発行に失敗しました"
 [ -n "$BOT_TOKEN" ] || _die "ボットトークンが空でした"
@@ -280,17 +284,17 @@ if [ -f "${SCRIPT_DIR}/build.yml" ]; then
 	_log ".forgejo/workflows/build.yml をリポジトリへ反映"
 	WORK=$(mktemp -d)
 	git -c http.extraHeader="Authorization: token ${BOT_TOKEN}" \
-		clone -q "${API%/api/v1}/admin/owlv.git" "$WORK" || _die "owlv リポジトリの clone に失敗しました"
+		clone -q "${API%/api/v1}/${FORGEJO_ADMIN_USER}/owlv.git" "$WORK" || _die "owlv リポジトリの clone に失敗しました"
 	(
 		cd "$WORK" || exit 1
 		git checkout -q -B main
 		mkdir -p .forgejo/workflows
 		cp "${SCRIPT_DIR}/build.yml" .forgejo/workflows/build.yml
 		git add .forgejo/workflows/build.yml
-		if git -c user.email='admin@localhost' -c user.name='admin' diff --cached --quiet; then
+		if git -c user.email="${FORGEJO_ADMIN_USER}@localhost" -c user.name="${FORGEJO_ADMIN_USER}" diff --cached --quiet; then
 			echo "  変更なし"
 		else
-			git -c user.email='admin@localhost' -c user.name='admin' \
+			git -c user.email="${FORGEJO_ADMIN_USER}@localhost" -c user.name="${FORGEJO_ADMIN_USER}" \
 				commit -q -m 'ci: add/update build.yml'
 			git -c http.extraHeader="Authorization: token ${BOT_TOKEN}" push -q origin HEAD:main
 		fi
@@ -307,14 +311,14 @@ curl -fsS -X POST \
 	-H "Authorization: token ${BOT_TOKEN}" \
 	-H "Content-Type: application/json" \
 	-d '{"branch_name":"main","enable_push":false,"required_approvals":1,"enable_status_check":true}' \
-	"${API}/repos/admin/owlv/branch_protections" >/dev/null 2>&1 ||
+	"${API}/repos/${FORGEJO_ADMIN_USER}/owlv/branch_protections" >/dev/null 2>&1 ||
 	_info "ブランチ保護は既存のためスキップ (失敗時は要手動確認)"
 _ok "ブランチ保護"
 
 _log "Git VM セットアップ完了"
 echo ""
 echo " 【管理者パスワード — 初回ログイン後に変更してください】"
-echo "   admin / ${FORGEJO_ADMIN_PASS}"
+echo "   ${FORGEJO_ADMIN_USER} / ${FORGEJO_ADMIN_PASS}"
 echo ""
 echo " 【残りの手動作業】"
 echo "   なし (リポジトリ作成・build.yml 反映・ブランチ保護はすべて自動化済み)"
