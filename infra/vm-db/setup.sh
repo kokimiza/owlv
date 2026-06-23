@@ -160,39 +160,43 @@ sleep 2
 # ── ユーザー・DB 作成 ─────────────────────────────────────
 _log "DB ユーザー・データベース作成"
 
-su -m _postgresql -c "psql -c \"\
+# -U postgres 必須: 省略すると psql は実行 OS ユーザー名 (_postgresql) を
+# PG ロールとして使おうとし、pg_hba.conf に一致する行が無く全件 reject される
+# (実際に発生: 失敗が "既に存在します" 側に握り潰され、初回実行でもロール/DBが
+# 一切作成されないまま "✓" が表示されていた)。
+su -m _postgresql -c "psql -U postgres -c \"\
     CREATE USER ${DB_APP_USER} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS \
         ENCRYPTED PASSWORD 'changeme_app_password';\"" 2>/dev/null ||
 	_info "${DB_APP_USER} は既に存在します"
 
-su -m _postgresql -c "psql -c \"\
+su -m _postgresql -c "psql -U postgres -c \"\
     CREATE USER ${DB_REPL_USER} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE REPLICATION \
         ENCRYPTED PASSWORD 'changeme_repl_password';\"" 2>/dev/null ||
 	_info "${DB_REPL_USER} は既に存在します"
 
 # テーブル所有者・DDL実行専用。owl_app には所有権を渡さない (doc/tenant_isolation.md §6.4)。
-su -m _postgresql -c "psql -c \"\
+su -m _postgresql -c "psql -U postgres -c \"\
     CREATE USER ${DB_MIGRATOR_USER} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS \
         ENCRYPTED PASSWORD 'changeme_migrator_password';\"" 2>/dev/null ||
 	_info "${DB_MIGRATOR_USER} は既に存在します"
 
 # root_admin_username のブートストラップ専用。tenants テーブルの全件参照のみ許可する。
-su -m _postgresql -c "psql -c \"\
+su -m _postgresql -c "psql -U postgres -c \"\
     CREATE USER ${DB_PLATFORM_ADMIN_USER} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS \
         ENCRYPTED PASSWORD 'changeme_platform_admin_password';\"" 2>/dev/null ||
 	_info "${DB_PLATFORM_ADMIN_USER} は既に存在します"
 
 # owlv-projector (doc/cqrs.md) 専用。SELECT のみ — INSERT 権限を一切持たない。
-su -m _postgresql -c "psql -c \"\
+su -m _postgresql -c "psql -U postgres -c \"\
     CREATE USER ${DB_PROJECTOR_USER} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS \
         ENCRYPTED PASSWORD 'changeme_projector_password';\"" 2>/dev/null ||
 	_info "${DB_PROJECTOR_USER} は既に存在します"
 
-su -m _postgresql -c "createdb -O ${DB_MIGRATOR_USER} ${DB_NAME} 2>/dev/null" ||
+su -m _postgresql -c "createdb -U postgres -O ${DB_MIGRATOR_USER} ${DB_NAME} 2>/dev/null" ||
 	_info "${DB_NAME} は既に存在します"
 
 # RLS を有効化
-su -m _postgresql -c "psql ${DB_NAME} -c '\
+su -m _postgresql -c "psql -U postgres ${DB_NAME} -c '\
     ALTER DATABASE ${DB_NAME} SET row_security = on;'" || true
 
 _ok "DB ユーザー・データベース作成"
