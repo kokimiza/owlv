@@ -59,8 +59,8 @@
 #   # (0) 【初回のみ】infra/sets/ に OpenBSD 7.9 amd64 インストールセットを用意する
 #   #     以下のファイルがすべて揃っていること:
 #   #       base79.tgz  comp79.tgz  bsd  bsd.mp  bsd.rd  SHA256  SHA256.sig  BUILDINFO
-#   #     不足ファイルを取得する例 (macOS から):
-#   #       curl -o infra/sets/BUILDINFO https://cdn.openbsd.org/pub/OpenBSD/7.9/amd64/BUILDINFO
+#   #     不足ファイルを取得する例:
+#   #       mkdir -p infra/sets && curl -Z -o "infra/sets/#1" "https://cdn.openbsd.org/pub/OpenBSD/7.9/amd64/{base79.tgz,comp79.tgz,bsd,bsd.mp,bsd.rd,SHA256,SHA256.sig,BUILDINFO}"
 #   #
 #   #   【初回のみ】sets/ をホストへ転送 (大容量なので rsync の通常対象から除外している):
 #   rsync -av --progress infra/sets/ <YOUR_USERNAME>@192.168.50.200:/tmp/infra/sets/
