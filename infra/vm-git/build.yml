@@ -3,9 +3,13 @@
 # - PR (opened/synchronize/reopened): Sec(HLint) → Dev(build/test) のみ実行する。
 #   結果は Forgejo Web UI 上で管理者の Approve 判断材料になる(§3.3)。
 # - main への merge (= 承認済み PR が統合された push): 同じ Sec/Dev を再実行した
-#   うえで、タグ付与・リリースビルド・Forgejo Release 公開まで自動実行する。
-#   このリリース作成こそが owl-control.sh deploy-poll(§4.2)が検知する
-#   「承認済み・未デプロイ」状態であり、デプロイの起点になる。
+#   うえで、タグ付与・リリースビルド・manifest.txt(未署名)添付までを自動実行する。
+#   リリースは draft=true で作成する — manifest.txt への signify 署名は
+#   Build VM 上では行わない(§4.2: 秘密鍵を Build VM に置かないため)。
+#   ホスト側の owl-control.sh sign-poll が未署名(draft=true)のリリースを検知し、
+#   manifest.txt.sig を追加添付した上で draft=false に切り替える。これが
+#   owl-control.sh deploy-poll(§4.2)が検知する「承認済み・未デプロイ」状態であり、
+#   デプロイの起点になる。
 #
 # vm-build は Docker 非搭載・host モード専用(§3.1)。Node.js を要する公式
 # actions/checkout 等は使わず、checkout からリリース作成まで base ツール
@@ -57,7 +61,7 @@ jobs:
           SHA_SHORT=$(printf '%s' "${FORGEJO_SHA}" | cut -c1-7)
           echo "tag=v${CABAL_VER}-${SHA_SHORT}" >>"$FORGEJO_OUTPUT"
 
-      - name: 成果物の収集とマニフェスト署名 (§4.2 三重検証の根拠データ)
+      - name: 成果物の収集と未署名マニフェスト生成 (§4.2 三重検証の根拠データ)
         if: ${{ steps.ver.outputs.tag != '' }}
         run: |
           set -eu
@@ -79,10 +83,10 @@ jobs:
             done
           } >manifest.txt
 
-          # AP VM 側 (owl-control.sh cmd_deploy) が /etc/owlv/release-signify.pub
-          # で検証する。秘密鍵は Build VM 上のみに存在し、CI ジョブ実行ユーザー
-          # (_runner) のみが読める (infra/vm-build/setup.sh で生成、§4.2)。
-          signify -S -s /etc/owlv/release-signify.sec -m manifest.txt -x manifest.txt.sig
+          # signify 署名はここでは行わない。署名鍵は Build VM に置かず、
+          # ホスト OS が排他的に保持する (§4.2: 信頼の根の一元化)。
+          # ホスト側の owl-control.sh sign-poll が、このあと draft=true で
+          # 作成するリリースを検知して manifest.txt.sig を追加添付する。
 
       - name: "タグを作成して push (§3.3: 不変セマンティックバージョニング)"
         if: ${{ steps.ver.outputs.tag != '' }}
@@ -102,17 +106,21 @@ jobs:
           GHC_VER="$(ghc --numeric-version)"
           BODY="commit: ${FORGEJO_SHA}\\nuname -r: ${UNAME_R}\\nGHC: ${GHC_VER}"
 
+          # draft=true で作成する — manifest.txt はまだ未署名であり、ホスト側の
+          # owl-control.sh sign-poll が署名を追加するまでは「承認済み・未デプロイ」
+          # 状態(deploy-poll の検知対象)にしない。
           REL_ID=$(curl -fsS -X POST \
             -H "Authorization: token ${FORGEJO_TOKEN}" \
             -H "Content-Type: application/json" \
-            -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"body\":\"${BODY}\",\"draft\":false,\"prerelease\":false}" \
+            -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"body\":\"${BODY}\",\"draft\":true,\"prerelease\":false}" \
             "${FORGEJO_API_URL}/repos/${FORGEJO_REPOSITORY}/releases" |
             grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
           [ -n "$REL_ID" ] || { echo "リリース作成に失敗しました" >&2; exit 1; }
 
+          # manifest.txt.sig はまだ存在しない(ホストが sign-poll で後付けする)。
           for f in \
             owlv-app-openbsd-amd64 owlv-batch-center-openbsd-amd64 owlv-projector-openbsd-amd64 \
-            manifest.txt manifest.txt.sig; do
+            manifest.txt; do
             curl -fsS -X POST \
               -H "Authorization: token ${FORGEJO_TOKEN}" \
               -F "attachment=@${f}" \
