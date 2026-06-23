@@ -180,7 +180,9 @@ log:
   level: info
 
 runner:
-  file: .runner
+  # 相対パスだと rcctl 経由の起動時 (cwd=/) に ./.runner を探して見つからず
+  # 即時 failed になる (実際に発生)。絶対パスで固定する。
+  file: /var/forgejo-runner/.runner
   capacity: 2
   envs:
     CABAL_DIR: /var/forgejo-runner/.cabal
@@ -240,7 +242,11 @@ cp /var/forgejo-runner/config.yml.template /var/forgejo-runner/config.yml
 chown _runner /var/forgejo-runner/config.yml
 
 rcctl enable forgejo_runner
-rcctl start forgejo_runner
+if ! rcctl start forgejo_runner; then
+	_log "forgejo_runner 起動失敗 — ログを確認:"
+	tail -n 40 /var/log/daemon 2>/dev/null | grep -i forgejo_runner | while read -r l; do _info "$l"; done
+	_die "rcctl start forgejo_runner に失敗しました (詳細は上記ログを参照)"
+fi
 _ok "Forgejo Runner 起動"
 
 _log "Build VM セットアップ完了"
