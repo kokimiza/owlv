@@ -62,7 +62,7 @@ INSERT OR IGNORE INTO _projector_checkpoint (id, last_seq, updated_at) VALUES (1
 1サイクルの処理:
 
 1. `last_seq` をSQLiteから読む。
-2. PostgreSQLから `SELECT seq, payload FROM events WHERE tenant_id = ? AND seq > ? ORDER BY seq ASC LIMIT 500`（Identity streamなら `tenant_id IS NULL`）。`forTenant`/`identityStore`（[tenant_isolation.md](tenant_isolation.md) §5.3）と同じ束縛済みハンドル経由で読む——生の `tenant_id` パラメータをこの層でも作らない。
+2. PostgreSQLから `SELECT seq, payload FROM events WHERE tenant_id = ? AND seq > ? ORDER BY seq ASC LIMIT 500`（Identity streamなら `tenant_id IS NULL`）。Tenant stream は `bindTenantSession` で RLS セッション変数を束縛してから読む。Identity stream は `loadEventsSince conn Nothing ...` で読む。
 3. 取得したイベント群をHaskellの `evolve` 相当ではなく、**読みモデル専用の畳み込み関数**（§5.4）でビュー行へ変換し、SQLite側の対象テーブルへ `INSERT ... ON CONFLICT DO UPDATE`。
 4. ビュー行の書き込みと `_projector_checkpoint` の更新を**同一SQLiteトランザクション**でコミットする。
 
@@ -197,7 +197,7 @@ SQLiteのリードモデルファイルは**使い捨て可能なキャッシュ
 ## 8. 既存ドキュメントとの関係整理
 
 - **[tenant_isolation.md](tenant_isolation.md)**: PostgreSQL側の3層防御（§3）の上に成立する。SQLite側はRLSを持てないため、同等の structural defense をファイル分離（§4.1）とHaskell型束縛（§4.2）で再現する。Identity stream/Tenant streamの分割は `identity.sqlite3`/`<tenant_id>.sqlite3` という1対1の対応物を持つ。
-- **[cron_batch.md](cron_batch.md)**: `owlv-batch-center`（`_owlbatch`）はTenantごとに `forTenant` でループする書き込み専用バッチであり、SQLiteには一切触れない。`owlv-projector`（`_owlproject`）はその逆——PostgreSQLには読み取り専用（`SELECT`のみ、`BYPASSRLS`は持たず §6.6 と同じく `forTenant`/`identityStore` 経由でテナントごとに正規の権限で読む）で、SQLiteへの書き込み専用。両者は権限・役割ともに重ならない別プロセス。
+- **[cron_batch.md](cron_batch.md)**: `owlv-batch-center`（`_owlbatch`）はTenantごとに `forTenant` でループする書き込み専用バッチであり、SQLiteには一切触れない。`owlv-projector`（`_owlproject`）はその逆——PostgreSQLには読み取り専用（`SELECT`のみ、`BYPASSRLS`は持たず、Tenant stream は `bindTenantSession`、Identity stream は `tenant_id IS NULL` の差分読み取りで処理する）で、SQLiteへの書き込み専用。両者は権限・役割ともに重ならない別プロセス。
 - **CLAUDE.md**: 「Event store: PostgreSQL。Read model: SQLite3」の記述（本書策定により確定）と、「`src/Shell/` のみがIOを許可される」という制約は変わらない——`owlv-projector` も `Shell.ReadModel`/`Shell.Projector`（新設、`Core/` には置かない）の薄いIOラッパーとして実装する。
 
 ## 9. テスト戦略
