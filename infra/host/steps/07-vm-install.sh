@@ -316,6 +316,28 @@ else
 fi
 _ok "本番用 vm.conf 適用完了"
 
+# 5台合計の宣言メモリ (db 1G + git 1G + build 4G + audit 256M + ap 512M ≒ 6.75G)
+# 自体は物理メモリに対して余裕があっても、vmd の vioblk バックエンドプロセスが
+# ゲストディスク I/O をホスト側ページキャッシュとして溜め込むため、同じホスト
+# ブートのまま再プロビジョニングを繰り返すと "空きメモリ" が単調に減っていく
+# (実際に発生: 5台目の起動だけが無言でハングしタイムアウトした。原因はホスト
+# の空きメモリ枯渇で、vmstat の fre が数百M まで下がっていた)。
+# 起動前に必ずログへ残し、次回同じ調査をしなくて済むようにする。
+_physmem_b=$(sysctl -n hw.physmem)
+_fre_str=$(vmstat 2>/dev/null | awk 'END{print $4}')
+_log "本番起動前の空きメモリ: ${_fre_str:-不明} / 物理 $(awk -v b="$_physmem_b" 'BEGIN{printf "%.1fG", b/1024/1024/1024}')$(
+	awk -v fre="$_fre_str" -v phys="$_physmem_b" 'BEGIN {
+		if (fre == "" || phys == 0) exit
+		suf = substr(fre, length(fre), 1)
+		n = fre + 0
+		if (suf == "K") bytes = n * 1024
+		else if (suf == "M") bytes = n * 1024 * 1024
+		else if (suf == "G") bytes = n * 1024 * 1024 * 1024
+		else bytes = n
+		printf " (空き率 %.1f%%)", bytes / phys * 100
+	}'
+)"
+
 _log "本番 VM を起動して SSH 応答を確認..."
 for _vm in vm-db vm-git vm-build vm-audit vm-ap; do
 	_state=$(_vm_state_for "$_vm" || true)
