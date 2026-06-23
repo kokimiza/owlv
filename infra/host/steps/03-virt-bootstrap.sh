@@ -55,8 +55,24 @@ ifconfig bridge1 add vether1
 ifconfig bridge1 up
 _log "bridge1 members: $(_bridge_members bridge1)"
 
+# ── audit_lan: vether2 (IP) + bridge2 (スイッチ) ──────────
+_log "vether2 を destroy → create..."
+ifconfig vether2 destroy 2>/dev/null && _log "vether2 destroy 完了" || _log "vether2 は存在しなかった"
+ifconfig vether2 create
+_log "vether2 に inet ${HOST_AUDIT_IP} netmask 255.255.255.0 up を設定..."
+ifconfig vether2 inet "${HOST_AUDIT_IP}" netmask 255.255.255.0 up ||
+	_die "vether2 への IP 設定失敗"
+_log "vether2 状態: $(ifconfig vether2 | grep 'inet ')"
+
+_log "bridge2 を destroy → create → vether2 を追加..."
+ifconfig bridge2 destroy 2>/dev/null && _log "bridge2 destroy 完了" || _log "bridge2 は存在しなかった"
+ifconfig bridge2 create
+ifconfig bridge2 add vether2
+ifconfig bridge2 up
+_log "bridge2 members: $(_bridge_members bridge2)"
+
 # 再起動時も自動設定されるよう hostname.* を書いておく (パーミッション 640 必須)
-_log "hostname.vether0/bridge0/vether1/bridge1 を書き込み..."
+_log "hostname.vether{0,1,2}/bridge{0,1,2} を書き込み..."
 printf 'inet %s 255.255.255.0\nup\n' "${HOST_INT_IP}" >/etc/hostname.vether0
 chmod 640 /etc/hostname.vether0
 printf 'add vether0\nup\n' >/etc/hostname.bridge0
@@ -65,8 +81,12 @@ printf 'inet %s 255.255.255.0\nup\n' "${HOST_DEV_IP}" >/etc/hostname.vether1
 chmod 640 /etc/hostname.vether1
 printf 'add vether1\nup\n' >/etc/hostname.bridge1
 chmod 640 /etc/hostname.bridge1
+printf 'inet %s 255.255.255.0\nup\n' "${HOST_AUDIT_IP}" >/etc/hostname.vether2
+chmod 640 /etc/hostname.vether2
+printf 'add vether2\nup\n' >/etc/hostname.bridge2
+chmod 640 /etc/hostname.bridge2
 
-_ok "vether0+bridge0 (${HOST_INT_IP}) / vether1+bridge1 (${HOST_DEV_IP}) 設定"
+_ok "vether0+bridge0 (${HOST_INT_IP}) / vether1+bridge1 (${HOST_DEV_IP}) / vether2+bridge2 (${HOST_AUDIT_IP}) 設定"
 
 # ── bridge を通過する L2 トラフィックを pf に必ず通す (dev_sec_ops.md §1.3) ──
 # OpenBSD の bridge(4) は既定で同一スイッチ内のフレームを pf を経由せず直接
@@ -98,6 +118,9 @@ switch "internal_lan" {
 }
 switch "dev_lan" {
     interface bridge1
+}
+switch "audit_lan" {
+    interface bridge2
 }
 VMDEOF
 

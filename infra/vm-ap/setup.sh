@@ -19,12 +19,24 @@ _ok() { _log "  ✓ $*"; }
 OWL_AP_IP="${OWL_AP_IP:?OWL_AP_IP is required}"
 OWL_DB_IP="${OWL_DB_IP:?OWL_DB_IP is required}"
 GIT_IP="${OWL_GIT_IP:?OWL_GIT_IP is required}"
+AUDIT_IP="${OWL_AUDIT_IP:?OWL_AUDIT_IP is required}"
 APP_SSH_PORT="${APP_SSH_PORT:-8022}"
 
 # doc/user.md §7: Admin を自動生成してよい唯一のOSユーザー名 (owl-config.toml [user])
 ROOT_ADMIN_USERNAME="${OWLV_ROOT_ADMIN_USERNAME:-}"
 
 _log "AP VM セットアップ開始 (${OWL_AP_IP})"
+
+# ── syslog の Audit VM への一方通行転送 (§6.1 鉄則②) ──────────
+# auth ファシリティ(su/sudo・sshd ログイン成否)のみを転送する。仕訳金額・
+# 顧客名等のドメインデータは owlv アプリのログ出力(auth とは別ファシリティ)
+# 経由では一切 syslog に流していないため、ここでの転送対象を auth に絞ること
+# 自体がマスキングの実体になる。
+grep -qF "@${AUDIT_IP}" /etc/syslog.conf 2>/dev/null || {
+	printf 'auth.*\t\t\t\t\t@%s\n' "${AUDIT_IP}" >>/etc/syslog.conf
+	rcctl restart syslogd 2>/dev/null || true
+	_ok "syslog.conf に Audit VM (${AUDIT_IP}) への auth.* 転送を追加"
+}
 
 # ── パッケージ ────────────────────────────────────────────
 _log "パッケージインストール"

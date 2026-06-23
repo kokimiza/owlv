@@ -37,16 +37,22 @@ subnet 10.0.2.0 netmask 255.255.255.0 {
     next-server ${HOST_DEV_IP};
     filename "auto_install";
 }
+subnet 10.0.3.0 netmask 255.255.255.0 {
+    range 10.0.3.200 10.0.3.210;
+    option routers ${HOST_AUDIT_IP};
+    next-server ${HOST_AUDIT_IP};
+    filename "auto_install";
+}
 DHCP
 # dhcpd は IP を持つ vether 上で listen する (bridge は L2 スイッチのみで IP なし)
 # rcctl restart は "enabled" なサービスにしか使えない。
 # STEP 9 で disable されている再実行時のために enable → stop(安全) → start の順にする。
 _log "dhcpd を enable → flags 設定 → 起動..."
 rcctl enable dhcpd
-rcctl set dhcpd flags "-c /tmp/dhcpd-prov.conf vether0 vether1"
+rcctl set dhcpd flags "-c /tmp/dhcpd-prov.conf vether0 vether1 vether2"
 rcctl stop dhcpd 2>/dev/null || true # 再実行時の既存インスタンスを停止
 
-# レンジは 10.0.1.200-210 / 10.0.2.200-210 (各 11 個) しかない。
+# レンジは 10.0.1.200-210 / 10.0.2.200-210 / 10.0.3.200-210 (各 11 個) しかない。
 # vmd は vio0 に毎回ランダム MAC を割り振るため、ベアメタルリストアの
 # 再実行を繰り返すと /var/db/dhcpd.leases に古い MAC のリースが積み上がり、
 # プール枯渇で "no free leases" になり VM の autoinstall が失敗する事故が起きる
@@ -70,6 +76,7 @@ cat >/tmp/httpd-prov.conf <<HTTP
 server "prov" {
     listen on ${HOST_INT_IP} port 80
     listen on ${HOST_DEV_IP} port 80
+    listen on ${HOST_AUDIT_IP} port 80
     root "/htdocs"
     directory auto index
 }

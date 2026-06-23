@@ -256,6 +256,13 @@ UNAME_R_EXPECTED="$(awk -F= '/^uname_r=/{print $2}' manifest.txt)"
 [ "$UNAME_R_LOCAL" = "$UNAME_R_EXPECTED" ] ||
 	{ echo "OS リリース不一致: 本機 ${UNAME_R_LOCAL} / ビルド時 ${UNAME_R_EXPECTED}" >&2; exit 1; }
 
+# uname -r 一致だけでは syspatch の適用状態(パッチレベル)差を検出できないため、
+# 稼働中カーネル本体のハッシュも比較する (doc/dev_sec_ops.md §1.3, §4.2)。
+KERNEL_SHA_LOCAL="$(sha256 -q /bsd)"
+KERNEL_SHA_EXPECTED="$(awk -F= '/^kernel_sha256=/{print $2}' manifest.txt)"
+[ "$KERNEL_SHA_LOCAL" = "$KERNEL_SHA_EXPECTED" ] ||
+	{ echo "カーネル(syspatch 適用状態)不一致: Build VM と AP VM の syspatch レベルを揃えてください" >&2; exit 1; }
+
 for pair in owlv-app-openbsd-amd64:owlv-app owlv-batch-center-openbsd-amd64:owlv-batch-center \
     owlv-projector-openbsd-amd64:owlv-projector; do
 	src="${pair%%:*}"

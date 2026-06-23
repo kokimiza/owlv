@@ -31,7 +31,7 @@ pfctl -f - <<PFEOF
 # egress に複数アドレス (DHCP autoconf 等) が乗っているホストで round-robin
 # プールになり、リターンパケットが来ない側のアドレスに当たると NAT が
 # 不通になる事故が起きる (実際に発生: vm-db が 1.1.1.1 に到達不可)。
-match out on egress from { 10.0.1.0/24, 10.0.2.0/24 } nat-to (egress:0)
+match out on egress from { 10.0.1.0/24, 10.0.2.0/24, 10.0.3.0/24 } nat-to (egress:0)
 
 set block-policy drop
 set skip on lo0
@@ -57,20 +57,26 @@ pass quick on vether1 proto udp from any port 67 to any port 68 no state
 
 # VM ↔ ホスト: その他の通信
 # bridge(4) のフィルタリングはブリッジ本体ではなく各メンバーで行われる。
-# bridge0/1 = 手動生成スイッチ, veb0/1 = vmd 自動生成スイッチ (両方許可)
+# bridge0/1/2 = 手動生成スイッチ, veb0/1/2 = vmd 自動生成スイッチ (両方許可)
 # 内部スイッチは keep state 不要。no state で通す。
+# (audit_lan もプロビジョニング中だけは pkg_add 等のため一時的に開ける。
+#  本番封鎖後の audit_lan 制限は host/conf/pf.conf §6.1 が別途強制する)
 pass on tap     all no state
 pass on bridge0 all no state
 pass on bridge1 all no state
+pass on bridge2 all no state
 pass on veb0    all no state
 pass on veb1    all no state
+pass on veb2    all no state
 pass on vether0 all no state
 pass on vether1 all no state
+pass on vether2 all no state
 
 # VM DNS → unwind (127.0.0.1:53) へリダイレクト
 # install.conf の "DNS nameservers = gateway" を機能させる (STEP 3 で unwind 起動済み)
 pass in quick on vether0 proto { udp tcp } from 10.0.1.0/24 to ${HOST_INT_IP} port 53 rdr-to 127.0.0.1
 pass in quick on vether1 proto { udp tcp } from 10.0.2.0/24 to ${HOST_DEV_IP} port 53 rdr-to 127.0.0.1
+pass in quick on vether2 proto { udp tcp } from 10.0.3.0/24 to ${HOST_AUDIT_IP} port 53 rdr-to 127.0.0.1
 
 # VM → インターネット: インストールセット取得 / pkg_add / ソースビルド用
 pass out on egress all keep state

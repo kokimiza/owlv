@@ -96,6 +96,9 @@ switch "internal_lan" {
 switch "dev_lan" {
     interface bridge1
 }
+switch "audit_lan" {
+    interface bridge2
+}
 vm "${vmname}" {
     disable
     memory ${inst_mem}
@@ -276,6 +279,7 @@ _vm_install_if_needed() {
 _vm_install_if_needed "vm-db" "$OWL_DB_IP" "$HOST_INT_IP" "/home/vmm/db.img" "internal_lan"
 _vm_install_if_needed "vm-git" "$OWL_GIT_IP" "$HOST_DEV_IP" "/home/vmm/git.img" "dev_lan"
 _vm_install_if_needed "vm-build" "$OWL_BUILD_IP" "$HOST_DEV_IP" "/home/vmm/build.img" "dev_lan"
+_vm_install_if_needed "vm-audit" "$OWL_AUDIT_IP" "$HOST_AUDIT_IP" "/home/vmm/audit.img" "audit_lan" "-comp* -x* -game* -man* done"
 _vm_install_if_needed "vm-ap" "$OWL_AP_IP" "$HOST_INT_IP" "/home/vmm/ap.img" "internal_lan" "-comp* -x* -game* -man* done"
 
 # 全台の OS クリーンインストールが成功した後に、完全な vm.conf を適用
@@ -290,7 +294,7 @@ fi
 _ok "本番用 vm.conf 適用完了"
 
 _log "本番 VM を起動して SSH 応答を確認..."
-for _vm in vm-db vm-git vm-build vm-ap; do
+for _vm in vm-db vm-git vm-build vm-audit vm-ap; do
 	_state=$(_vm_state_for "$_vm" || true)
 	if [ "$_state" != "running" ] && [ "$_state" != "starting" ]; then
 		_log "[${_vm}] vmctl start"
@@ -309,5 +313,6 @@ _log_vmctl_status "" || _log "  (取得失敗)"
 _wait_ssh "$OWL_DB_IP" "vm-db"
 _wait_ssh "$OWL_GIT_IP" "vm-git"
 _wait_ssh "$OWL_BUILD_IP" "vm-build"
+_wait_ssh "$OWL_AUDIT_IP" "vm-audit"
 _wait_ssh "$OWL_AP_IP" "vm-ap"
 _ok "本番 VM 起動確認完了"

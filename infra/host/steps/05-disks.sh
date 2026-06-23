@@ -4,7 +4,7 @@ _step 5 "VM ディスクイメージ作成"
 _log "ディスクイメージディレクトリ: /home/vmm"
 install -d -m 755 /home/vmm
 _require_free_space /home/vmm 20
-for spec in "ap:20G" "db:50G" "git:50G" "build:50G"; do
+for spec in "ap:20G" "db:50G" "git:50G" "build:50G" "audit:10G"; do
 	name="${spec%%:*}"
 	size="${spec##*:}"
 	img="/home/vmm/${name}.img"

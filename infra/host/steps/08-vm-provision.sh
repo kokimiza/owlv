@@ -67,11 +67,13 @@ _vm_provision() {
 	_log "[${vmname}] setup.sh を実行中..."
 	SETUP_CMD="OWL_AP_IP='${OWL_AP_IP}' OWL_DB_IP='${OWL_DB_IP}' \
          OWL_GIT_IP='${OWL_GIT_IP}' OWL_BUILD_IP='${OWL_BUILD_IP}' \
+         OWL_AUDIT_IP='${OWL_AUDIT_IP}' \
          OWL_RELEASE='${OWL_RELEASE}' GHC_VERSION='${GHC_VERSION}' \
          PG_VERSION='${PG_VERSION}' FORGEJO_VERSION='${FORGEJO_VER}' \
          FORGEJO_RUNNER_VERSION='${FORGEJO_RUNNER_VER}' \
          FORGEJO_RUNNER_SECRET='${FORGEJO_RUNNER_SECRET}' \
          OWLV_ROOT_ADMIN_USERNAME='${OWLV_ROOT_ADMIN_USERNAME}' \
+         OWL_AUDIT_NOTIFY_WEBHOOK='${OWL_AUDIT_NOTIFY_WEBHOOK}' \
          sh /provision/${vmname}/setup.sh"
 	if [ "$vmname" = "vm-git" ]; then
 		SETUP_OUTPUT=$(ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
@@ -112,4 +114,5 @@ _vm_provision() {
 _vm_provision "vm-db" "$OWL_DB_IP"
 _vm_provision "vm-git" "$OWL_GIT_IP"
 _vm_provision "vm-build" "$OWL_BUILD_IP"
+_vm_provision "vm-audit" "$OWL_AUDIT_IP"
 _vm_provision "vm-ap" "$OWL_AP_IP"

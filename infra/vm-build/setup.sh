@@ -17,6 +17,7 @@ _ok() { _log "  ✓ $*"; }
 
 OWL_BUILD_IP="${OWL_BUILD_IP:?OWL_BUILD_IP is required}"
 OWL_GIT_IP="${OWL_GIT_IP:?OWL_GIT_IP is required}"
+AUDIT_IP="${OWL_AUDIT_IP:?OWL_AUDIT_IP is required}"
 FORGEJO_RUNNER_SECRET="${FORGEJO_RUNNER_SECRET:?FORGEJO_RUNNER_SECRET is required}"
 # GHC2024 (base ^>= 4.20 / GHC >= 9.10) を要求する。OpenBSD の packages/amd64
 # はリリース内でも point release ごとに古いバージョン名の .tgz を消す
@@ -37,6 +38,13 @@ export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 
 _log "Build VM セットアップ開始 (${OWL_BUILD_IP})"
+
+# ── syslog の Audit VM への一方通行転送 (§6.1 鉄則②) ──────────
+grep -qF "@${AUDIT_IP}" /etc/syslog.conf 2>/dev/null || {
+	printf 'auth.*\t\t\t\t\t@%s\n' "${AUDIT_IP}" >>/etc/syslog.conf
+	rcctl restart syslogd 2>/dev/null || true
+	_ok "syslog.conf に Audit VM (${AUDIT_IP}) への auth.* 転送を追加"
+}
 
 # ── パッケージ (GHC / cabal / 依存) ─────────────────────
 _log "GHC (>= ${GHC_MIN_VERSION}) および開発ツールをインストール"

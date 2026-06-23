@@ -28,8 +28,10 @@ _ok "設定ファイル配置"
 id owl-control >/dev/null 2>&1 || useradd -s /sbin/nologin -d /nonexistent owl-control
 
 # 必要パッケージ (この時点では外向き通信が開いているので pkg_add で取得)
-pkg_add age rclone 2>/dev/null && _ok "age / rclone インストール" ||
-	_info "警告: age / rclone の自動インストール失敗。後で手動実行: pkg_add age rclone"
+# curl は owl-control.sh の deploy-poll / sign-poll が Forgejo API (JSON POST/PATCH)
+# を叩くために必須 (OpenBSD base の ftp(1) では任意ヘッダ付き POST が困難なため)。
+pkg_add age rclone curl 2>/dev/null && _ok "age / rclone / curl インストール" ||
+	_info "警告: age / rclone / curl の自動インストール失敗。後で手動実行: pkg_add age rclone curl"
 
 # ── リリース署名鍵 (signify, doc/dev_sec_ops.md §4.2) ─────────────
 # 【信頼の根はホストに置く】Build VM は push/PR という外部入力を直接処理する
@@ -54,6 +56,18 @@ if [ ! -f "$SIGNIFY_SEC" ]; then
 else
 	_info "signify 鍵: 既存のためスキップ"
 fi
+
+# ── syslog の Audit VM への一方通行転送 (§5, §6.1 鉄則②) ──────────
+# auth ファシリティ(su/sudo・sshd ログイン成否・owl-integrity-check.sh の
+# 改ざん検知アラート)のみを転送する。ドメインデータは元々ホスト上に存在しない
+# ためマスキング処理は不要だが、転送対象を auth に絞ることで VM 側と同じ
+# 「メタ情報のみ」の方針を統一する。Audit VM がまだ存在しない/起動していない
+# 間は UDP の送り先が unreachable なだけで、fire-and-forget なので副作用はない。
+grep -qF "@${OWL_AUDIT_IP}" /etc/syslog.conf 2>/dev/null || {
+	printf 'auth.*\t\t\t\t\t@%s\n' "${OWL_AUDIT_IP}" >>/etc/syslog.conf
+	rcctl restart syslogd 2>/dev/null || true
+	_ok "syslog.conf に Audit VM (${OWL_AUDIT_IP}) への auth.* 転送を追加"
+}
 
 # vmm-bios (SeaBIOS) — /etc/firmware/vmm-bios が無いと vmctl start が
 # "Cannot allocate memory" という誤った errno に化けて失敗する。
