@@ -209,6 +209,29 @@ VMDEOF
 	_ok "${vmname} インストール完了"
 }
 
+# 本番起動後の SSH 待機はコンソールを一切見ていなかったため、ブートが
+# fsck プロンプト等で止まっていても "SSH 待機中" としか出ず原因が分からない。
+# install 時と同じ FIFO 保持方式でコンソールを録り、_wait_ssh に渡して
+# 待機中ログへ tail させる。
+# 呼び出しは VM ごとに逐次 (start → _wait_ssh → stop) なので fd 9 を固定で使い回す。
+_console_capture_start() {
+	local vmname="$1"
+	_cap_fifo="/tmp/owl-cons-in-${vmname}-$$"
+	_cap_log="/tmp/owl-cons-${vmname}-$$.log"
+	mkfifo -m 600 "$_cap_fifo"
+	vmctl console "$vmname" <"$_cap_fifo" 2>/dev/null |
+		awk '{ gsub(/\r/,""); gsub(/\033\[[0-9;]*[A-Za-z]/,""); print; fflush() }' \
+			>>"$_cap_log" &
+	_cap_bg=$!
+	exec 9>"$_cap_fifo"
+}
+
+_console_capture_stop() {
+	exec 9>&-
+	wait "$_cap_bg" 2>/dev/null || true
+	rm -f "$_cap_fifo" "$_cap_log"
+}
+
 _wait_ssh() {
 	local ip="$1" vmname="$2" cons_log="${3:-}"
 	local n=0
@@ -324,9 +347,16 @@ for _vm in vm-db vm-git vm-build vm-audit vm-ap; do
 done
 _log "本番 VM 状態:"
 _log_vmctl_status "" || _log "  (取得失敗)"
-_wait_ssh "$OWL_DB_IP" "vm-db"
-_wait_ssh "$OWL_GIT_IP" "vm-git"
-_wait_ssh "$OWL_BUILD_IP" "vm-build"
-_wait_ssh "$OWL_AUDIT_IP" "vm-audit"
-_wait_ssh "$OWL_AP_IP" "vm-ap"
+_wait_ssh_with_console() {
+	local ip="$1" vmname="$2"
+	_console_capture_start "$vmname"
+	_wait_ssh "$ip" "$vmname" "$_cap_log"
+	_console_capture_stop
+}
+
+_wait_ssh_with_console "$OWL_DB_IP" "vm-db"
+_wait_ssh_with_console "$OWL_GIT_IP" "vm-git"
+_wait_ssh_with_console "$OWL_BUILD_IP" "vm-build"
+_wait_ssh_with_console "$OWL_AUDIT_IP" "vm-audit"
+_wait_ssh_with_console "$OWL_AP_IP" "vm-ap"
 _ok "本番 VM 起動確認完了"
