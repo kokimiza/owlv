@@ -89,34 +89,19 @@ else
 	_info "HLint: 既存のためスキップ"
 fi
 
-# ── Forgejo Runner 専用ユーザー (signify 鍵の所有者として先に必要) ────────
-# 元はこの後の「Forgejo Runner」セクションで作成していたが、signify 鍵生成
-# (このすぐ下) が --owner _runner を要求するため、ユーザー作成自体を先に移した
-# (実際に発生: install: unknown user _runner)。
+# ── Forgejo Runner 専用ユーザー ────────────────────────────────
 id _runner >/dev/null 2>&1 ||
 	useradd -m -d /var/forgejo-runner -s /sbin/nologin _runner
 
-# ── リリース署名鍵 (signify, doc/dev_sec_ops.md §4.2 三重検証の「タグ署名」) ──
-# CI が生成する manifest.txt (タグ/コミット/uname -r/各バイナリのSHA256) に
-# signify で署名し、AP VM 側 (owl-control.sh cmd_deploy) が公開鍵で検証する。
-# GPG ではなく signify を使うのは、本プロジェクトが脆弱性DB同期(§4.1①)でも
-# signify を第一選択としているのと同じ理由 (OpenBSD ネイティブの検証経路)。
-# CI は無人実行のためパスフレーズ無し (-n) で鍵を生成する。秘密鍵は
-# Forgejo Runner の実行ユーザー (_runner) のみが読めるようにする。
-SIGNIFY_SEC=/etc/owlv/release-signify.sec
-SIGNIFY_PUB=/etc/owlv/release-signify.pub
-if [ ! -f "$SIGNIFY_SEC" ]; then
-	_log "リリース署名鍵 (signify) を生成"
-	install -d -m 750 -o _runner /etc/owlv
-	signify -G -n -p "$SIGNIFY_PUB" -s "$SIGNIFY_SEC" ||
-		_die "signify 鍵の生成に失敗しました"
-	chown _runner "$SIGNIFY_SEC" "$SIGNIFY_PUB"
-	chmod 600 "$SIGNIFY_SEC"
-	chmod 644 "$SIGNIFY_PUB"
-	_ok "signify 鍵: ${SIGNIFY_PUB}"
-else
-	_info "signify 鍵: 既存のためスキップ"
-fi
+# 【重要・doc/dev_sec_ops.md §4.2】リリース署名鍵 (signify) は Build VM では
+# 生成しない。Build VM は push/PR という外部入力を直接処理する Forgejo Runner
+# の実行環境であり、攻撃面が最も広い。ここに秘密鍵を置くと Build VM 侵害時に
+# 攻撃者が改ざんバイナリへ正規の署名を付与できてしまい、「成果物改ざんは署名
+# 検証で検出される」という前提(信頼の根)が崩壊する。署名鍵はホスト OS が
+# 排他的に保持し、ホスト側の owl-control.sh sign-poll(infra/host/sbin/、
+# infra/host/steps/01-host-foundation.sh で鍵生成)が manifest.txt に署名する。
+# Build VM の CI(vm-git/build.yml)は manifest.txt を未署名のまま Forgejo
+# リリースに draft=true で添付するところまでしか行わない。
 
 # ── Forgejo Runner (OpenBSD: ソースからビルド) ───────────────────
 # 公式リリースは linux-amd64 / linux-arm64 のみ。OpenBSD では go build が必要 (§3.1)。
@@ -250,6 +235,5 @@ echo " 【残りの手動作業】"
 echo "   1. owlv リポジトリに .forgejo/workflows/build.yml を追加"
 echo "   2. git push で CI トリガーを確認:"
 echo "      Forgejo → owlv → Actions タブ"
-echo "   3. リリース署名公開鍵を AP VM の /etc/owlv/release-signify.pub へ配置"
-echo "      (owl-control.sh cmd_deploy の三重検証で使用、doc/dev_sec_ops.md §4.2):"
-cat "$SIGNIFY_PUB"
+echo "   3. リリースの署名はこの VM では行わない。ホスト側の signify 鍵生成"
+echo "      (01-host-foundation.sh) と owl-control.sh sign-poll の cron 登録を確認すること"
