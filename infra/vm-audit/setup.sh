@@ -240,11 +240,80 @@ _fohlen_install() {
 	}
 
 	FOHLEN_API="http://${OWL_GIT_IP}:3000/api/v1/repos/${FOHLEN_OWNER}/${FOHLEN_REPO}"
-	_log "Git VM (${OWL_GIT_IP}) から fohlen の承認済みリリースを確認中..."
-	FOHLEN_REL_JSON="$(curl -fsS "${FOHLEN_API}/releases?draft=false&pre-release=false&limit=50" 2>/dev/null)" || {
-		_info "Git VM への到達に失敗しました。fohlen は未配置のままです(再プロビジョニングで再試行可能)"
+	FOHLEN_RELEASES_URL="${FOHLEN_API}/releases?draft=false&pre-release=false&limit=50"
+
+	# 【検証注記】実際に発生した問題: vm-git の REQUIRE_SIGNIN_VIEW=true に
+	# より匿名API呼び出しは全面拒否される ("Only signed in user is allowed to
+	# call APIs.", HTTP 403)。リポジトリも private で作成されるため、グローバル
+	# 設定を緩めるのではなく、deploy-poll 用 (write:repository) とは別に発行
+	# された読み取り専用 (read:repository) トークンを使う
+	# (vm-git/setup.sh / host/steps/08-vm-provision.sh 参照)。トークンが
+	# 未配布の場合は匿名のまま試行する (旧来挙動への後方互換)。
+	FOHLEN_TOKEN_FILE=/provision/audit-releases-token
+	FOHLEN_BASIC_AUTH=""
+	if [ -f "$FOHLEN_TOKEN_FILE" ]; then
+		FOHLEN_BASIC_AUTH="$(printf '%s:%s' "$FOHLEN_OWNER" "$(cat "$FOHLEN_TOKEN_FILE")" | openssl base64 -A)"
+		_info "audit-releases-token を検出。認証付きで Forgejo API へアクセスします"
+	else
+		_info "audit-releases-token が未配置のため匿名アクセスを試行します (vm-git の REQUIRE_SIGNIN_VIEW=true 環境では失敗します)"
+	fi
+
+	_log "Git VM (${OWL_GIT_IP}) から fohlen の承認済みリリースを確認中... (${FOHLEN_RELEASES_URL})"
+
+	# 【検証注記】以前は `curl -fsS ... 2>/dev/null` の成否だけを見ていたため、
+	# 「audit_lan→dev_lan に到達できない」のか「到達はできたがリポジトリが
+	# 404 等を返している」のかがログから区別できず、実際の調査時に原因の
+	# 切り分けに苦労した。-f を使わず生のHTTPステータスと curl 自身のエラー
+	# 文言を両方ログに残し、この2つのケースを明示的に分けて報告する。
+	FOHLEN_CHECK_TMP="$(mktemp -d /tmp/owl-fohlen-check.XXXXXX)"
+	# curl の引数を位置パラメータで組み立てる ($FOHLEN_AUTH_HEADER のような
+	# 文字列をクォートなしで展開すると "Authorization: Basic xxx" の空白で
+	# 分割されてしまい curl に渡る単語数が崩れるため、set -- で1引数ずつ
+	# 確実に積む)。
+	set -- -sS -o "${FOHLEN_CHECK_TMP}/body.json" -w '%{http_code}' \
+		--connect-timeout 5 --max-time 15
+	if [ -n "$FOHLEN_BASIC_AUTH" ]; then
+		set -- "$@" -H "Authorization: Basic ${FOHLEN_BASIC_AUTH}"
+	fi
+	set -- "$@" "$FOHLEN_RELEASES_URL"
+
+	# 【検証注記】set -e 下では `var=$(cmd)` の cmd が失敗した時点でこの代入文
+	# 自体の終了コードが非0になり、直後の `$?` 取得を待たずにスクリプトが
+	# 即座に終了してしまう。set +e で挟んで終了コードを確実に捕捉する。
+	set +e
+	FOHLEN_HTTP_CODE="$(curl "$@" 2>"${FOHLEN_CHECK_TMP}/err.txt")"
+	FOHLEN_CURL_RC=$?
+	set -e
+
+	if [ "$FOHLEN_CURL_RC" -ne 0 ]; then
+		_info "Git VM (${OWL_GIT_IP}:3000) への到達に失敗しました (curl 終了コード=${FOHLEN_CURL_RC})"
+		case "$FOHLEN_CURL_RC" in
+		6) _info "原因: DNS解決失敗 (OWL_GIT_IP=${OWL_GIT_IP} が名前の場合のみ該当。IPなら通常起きない)" ;;
+		7) _info "原因: 接続拒否/到達不可。Git VM 上で Forgejo (port 3000) が起動しているか確認してください" ;;
+		28) _info "原因: タイムアウト。audit_lan→dev_lan 間のルーティング/PFが疎通していない可能性" ;;
+		esac
+		_info "curl エラー詳細: $(cat "${FOHLEN_CHECK_TMP}/err.txt" 2>/dev/null)"
+		_info "手動確認コマンド例: ping -c3 ${OWL_GIT_IP} / curl -v ${FOHLEN_RELEASES_URL}"
+		_info "fohlen は未配置のままです(再プロビジョニングで再試行可能)"
+		rm -rf "$FOHLEN_CHECK_TMP"
 		return 0
-	}
+	fi
+
+	if [ "$FOHLEN_HTTP_CODE" != "200" ]; then
+		_info "Git VM には到達できましたが HTTP ${FOHLEN_HTTP_CODE} が返りました (${FOHLEN_RELEASES_URL})"
+		case "$FOHLEN_HTTP_CODE" in
+		404) _info "原因の可能性: リポジトリ ${FOHLEN_OWNER}/${FOHLEN_REPO} が Git VM 上に存在しない、または owl-config.toml の [forgejo] owner/repo の値が実際のリポジトリ名と一致していない" ;;
+		401 | 403) _info "原因の可能性: このAPIエンドポイントが匿名アクセスを拒否する設定になっている (releases 一覧取得は通常匿名公開リポジトリで認証不要のはず)" ;;
+		esac
+		_info "応答本文: $(cat "${FOHLEN_CHECK_TMP}/body.json" 2>/dev/null | head -c 500)"
+		_info "fohlen は未配置のままです(再プロビジョニングで再試行可能)"
+		rm -rf "$FOHLEN_CHECK_TMP"
+		return 0
+	fi
+
+	_ok "Git VM (${OWL_GIT_IP}:3000) への到達を確認 (HTTP 200)"
+	FOHLEN_REL_JSON="$(cat "${FOHLEN_CHECK_TMP}/body.json")"
+	rm -rf "$FOHLEN_CHECK_TMP"
 
 	# fohlen-* タグのみ対象。Forgejo API は作成日降順で返すため最初の1件が最新。
 	# owlv 本体のタグ (vX.Y.Z-<sha>) と名前空間を分けているのは
@@ -270,7 +339,15 @@ _fohlen_install() {
 	}
 
 	FOHLEN_TMP="$(mktemp -d /tmp/owl-fohlen.XXXXXX)"
-	FOHLEN_BASE_URL="http://${OWL_GIT_IP}:3000/${FOHLEN_OWNER}/${FOHLEN_REPO}/releases/download/${FOHLEN_TAG}"
+	# リリース資産のダウンロードも REQUIRE_SIGNIN_VIEW=true の対象になるため、
+	# releases 一覧取得と同じトークンが必要。ftp(1) は URL に user:pass を
+	# 埋め込む形式の Basic 認証をサポートする (このURLは一切ログに出力しない —
+	# トークンを含むため)。
+	if [ -f "$FOHLEN_TOKEN_FILE" ]; then
+		FOHLEN_BASE_URL="http://${FOHLEN_OWNER}:$(cat "$FOHLEN_TOKEN_FILE")@${OWL_GIT_IP}:3000/${FOHLEN_OWNER}/${FOHLEN_REPO}/releases/download/${FOHLEN_TAG}"
+	else
+		FOHLEN_BASE_URL="http://${OWL_GIT_IP}:3000/${FOHLEN_OWNER}/${FOHLEN_REPO}/releases/download/${FOHLEN_TAG}"
+	fi
 	for f in fohlen-openbsd-amd64 manifest.txt manifest.txt.sig; do
 		ftp -o "${FOHLEN_TMP}/${f}" "${FOHLEN_BASE_URL}/${f}" || {
 			_info "警告: ${f} の取得に失敗しました。fohlen 更新を中止します"
