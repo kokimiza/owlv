@@ -1,0 +1,11 @@
+* text=auto eol=lf
+
+*.go text eol=lf diff=golang
+go.mod text eol=lf
+go.sum text eol=lf -diff
+*.md text eol=lf
+
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
