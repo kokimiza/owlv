@@ -273,13 +273,40 @@ _ok "ボットトークン発行"
 
 API="http://${OWL_GIT_IP}:3000/api/v1"
 
+# git smart HTTP (clone/push) の認証先は REST API ("Authorization: token ...")
+# とは別の経路であり、Forgejo/Gitea の git-http バックエンドは Basic 認証
+# (username:token) を正としてサポートする。以前はリポジトリ作成 (REST API) と
+# clone (git smart HTTP) の両方を同じ "Authorization: token" ヘッダで通そうと
+# しており、clone 側が "400 Bad Request" で失敗していた (実際に発生)。
+# URL に "user:token@host" を埋め込む方式は git のエラーメッセージに資格情報
+# がそのまま出てプロビジョニングログ (/var/log/owlv/) に残ってしまうため、
+# 代わりに標準の Authorization: Basic ヘッダ (base64(user:token)) を
+# http.extraHeader で渡す — スキームを "token" から "Basic" に変えるだけで
+# URL 自体は資格情報を含まない。
+GIT_HTTP_BASE="${API%/api/v1}"
+GIT_REPO_URL="${GIT_HTTP_BASE}/${FORGEJO_ADMIN_USER}/owlv.git"
+GIT_BASIC_AUTH="$(printf '%s:%s' "${FORGEJO_ADMIN_USER}" "${BOT_TOKEN}" | openssl base64 -A)"
+
 _log "owlv リポジトリを作成"
-curl -fsS -X POST \
+_REPO_CREATE_BODY="$(mktemp)"
+_REPO_CREATE_STATUS=$(curl -s -o "$_REPO_CREATE_BODY" -w '%{http_code}' -X POST \
 	-H "Authorization: token ${BOT_TOKEN}" \
 	-H "Content-Type: application/json" \
 	-d '{"name":"owlv","auto_init":true,"default_branch":"main","private":true}' \
-	"${API}/user/repos" >/dev/null 2>&1 ||
-	_info "owlv リポジトリは既存のためスキップ"
+	"${API}/user/repos")
+case "$_REPO_CREATE_STATUS" in
+2??) _ok "owlv リポジトリを作成" ;;
+409) _info "owlv リポジトリは既存のためスキップ" ;;
+*)
+	# 409(既存)以外の失敗は握り潰さず、応答本文を出して原因を判別できるようにする
+	# (実際に発生: 認証エラー等の本当の失敗が「既存のためスキップ」に化けていた)。
+	_log "リポジトリ作成 API 応答 (status=${_REPO_CREATE_STATUS}):"
+	while read -r l; do _info "$l"; done <"$_REPO_CREATE_BODY"
+	rm -f "$_REPO_CREATE_BODY"
+	_die "owlv リポジトリの作成に失敗しました (status=${_REPO_CREATE_STATUS})"
+	;;
+esac
+rm -f "$_REPO_CREATE_BODY"
 _ok "owlv リポジトリ"
 
 # build.yml (owlv 本体/Haskell) と build-fohlen.yml (fohlen/Go, doc/audit_engine.md)
@@ -293,8 +320,8 @@ done
 if [ -n "$_WORKFLOW_FILES" ]; then
 	_log ".forgejo/workflows/ (${_WORKFLOW_FILES# }) をリポジトリへ反映"
 	WORK=$(mktemp -d)
-	git -c http.extraHeader="Authorization: token ${BOT_TOKEN}" \
-		clone -q "${API%/api/v1}/${FORGEJO_ADMIN_USER}/owlv.git" "$WORK" || _die "owlv リポジトリの clone に失敗しました"
+	git -c "http.extraHeader=Authorization: Basic ${GIT_BASIC_AUTH}" \
+		clone -q "$GIT_REPO_URL" "$WORK" || _die "owlv リポジトリの clone に失敗しました"
 	(
 		cd "$WORK" || exit 1
 		git checkout -q -B main
@@ -308,7 +335,7 @@ if [ -n "$_WORKFLOW_FILES" ]; then
 		else
 			git -c user.email="${FORGEJO_ADMIN_USER}@localhost" -c user.name="${FORGEJO_ADMIN_USER}" \
 				commit -q -m 'ci: add/update workflows'
-			git -c http.extraHeader="Authorization: token ${BOT_TOKEN}" push -q origin HEAD:main
+			git -c "http.extraHeader=Authorization: Basic ${GIT_BASIC_AUTH}" push -q origin HEAD:main
 		fi
 	) || _die "workflow の反映に失敗しました"
 	rm -rf "$WORK"
