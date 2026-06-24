@@ -293,7 +293,7 @@ _ok "SSH 設定 (ポート ${APP_SSH_PORT})"
 # 死んだ設定になっていた (実際に発生)。doc/cqrs.md の db-projector.env と
 # 同じ PG* 命名に統一する。
 _log "DB 接続環境変数テンプレートを配置"
-install -d -m 750 /etc/owl
+install -d -m 750 /etc/owlv
 cat >/etc/owlv/db.env.template <<EOF
 # /etc/owlv/db.env.template — owlv-app 専用 (owlv-app-run が source する)
 # db-secrets-rotate.sh が実値で /etc/owlv/db.env (chmod 600, owner owlv-app) を生成する。
