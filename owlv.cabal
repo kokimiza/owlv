@@ -48,6 +48,11 @@ library
         Core.Domain.Tax
         Core.Domain.Tenant
         Core.Domain.User
+        Core.Domain.Project
+        Core.Domain.ExternalOrder
+        Core.Domain.Personnel
+        Core.Domain.WorkAssignment
+        Core.Domain.ManagementAccounting
         Core.Error
         Core.Command
         Core.Event
@@ -171,6 +176,9 @@ test-suite owlv-test
         Core.ClosingSpec
         Core.UserSpec
         Core.TenantSpec
+        Core.ProjectSpec
+        Core.LaborSpec
+        Core.ManagementAccountingSpec
     build-depends:
         owlv,
         tasty            >= 1.4,
