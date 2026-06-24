@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -148,10 +149,13 @@ func run() error {
 	}
 
 	notifier := notify.NewNotifier(cfg.Paths.WebhookFile)
-	recent := newDetectionRing(50)
+
+	if err := healthCheckIndexSize(ctx, cfg.Paths.LogDir, ix); err != nil {
+		log.Printf("fohlen: index size health check failed (non-fatal): %v", err)
+	}
 
 	manifestPath := filepath.Join(cfg.Paths.LogDir, "sealed-manifest.sha256")
-	handler, err := web.New(cfg.Server.HtpasswdPath, ix, engine, manifestPath, recent.snapshot)
+	handler, err := web.New(cfg.Server.HtpasswdPath, ix, engine, manifestPath)
 	if err != nil {
 		return fmt.Errorf("build web server: %w", err)
 	}
@@ -160,7 +164,7 @@ func run() error {
 
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		runIngestLoop(ctx, ingester, notifier, engine, statsPath, recent, cfg.Ingest.PollIntervalSec)
+		runIngestLoop(ctx, ingester, notifier, engine, statsPath, cfg.Ingest.PollIntervalSec)
 	})
 
 	serveErr := make(chan error, 1)
@@ -230,8 +234,10 @@ func saveEngineSnapshot(engine *stats.Engine, path string) error {
 
 // runIngestLoop drives one ingest+detect+notify cycle every pollIntervalSec
 // until ctx is canceled, persisting the stats snapshot after each cycle so
-// a restart resumes learned baselines (doc/audit_engine.md §4.3).
-func runIngestLoop(ctx context.Context, ingester *ingest.Ingester, notifier *notify.Notifier, engine *stats.Engine, statsPath string, recent *detectionRing, pollIntervalSec int) {
+// a restart resumes learned baselines (doc/audit_engine.md §4.3). Detections
+// are persisted to the index by Ingester.RunCycle itself; this loop only
+// needs the returned slice to drive the webhook notifier.
+func runIngestLoop(ctx context.Context, ingester *ingest.Ingester, notifier *notify.Notifier, engine *stats.Engine, statsPath string, pollIntervalSec int) {
 	if pollIntervalSec <= 0 {
 		pollIntervalSec = 60
 	}
@@ -245,7 +251,6 @@ func runIngestLoop(ctx context.Context, ingester *ingest.Ingester, notifier *not
 			return
 		}
 		if len(detections) > 0 {
-			recent.add(detections)
 			if err := notifier.Notify(ctx, detections); err != nil {
 				log.Printf("fohlen: notify failed: %v", err)
 			}
@@ -266,31 +271,54 @@ func runIngestLoop(ctx context.Context, ingester *ingest.Ingester, notifier *not
 	}
 }
 
-// detectionRing keeps the last N detections in memory for the dashboard
-// (doc/audit_engine.md §4.4 "直近の逸脱検知イベント一覧").
-type detectionRing struct {
-	mu    sync.Mutex
-	items []stats.Detection
-	max   int
-}
+// indexSizeWarnRatio is the "目安: 3倍" health-check threshold from
+// doc/audit_engine.md §4.2: the index is expected to track the original
+// log volume within a small multiple, and a larger ratio signals an
+// unexpected blow-up (parser bug duplicating rows, runaway FTS tokenizer
+// output, etc.) worth a startup warning.
+const indexSizeWarnRatio = 3.0
 
-func newDetectionRing(max int) *detectionRing {
-	return &detectionRing{max: max}
-}
-
-func (d *detectionRing) add(items []stats.Detection) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.items = append(d.items, items...)
-	if len(d.items) > d.max {
-		d.items = d.items[len(d.items)-d.max:]
+// healthCheckIndexSize logs a warning (never fails startup) if the index
+// file is disproportionately larger than the original log volume it was
+// built from (doc/audit_engine.md §4.2).
+func healthCheckIndexSize(ctx context.Context, logDir string, ix *index.Index) error {
+	logBytes, err := sumLogBytes(logDir)
+	if err != nil {
+		return fmt.Errorf("sum log bytes: %w", err)
 	}
+	if logBytes == 0 {
+		return nil // nothing ingested yet; ratio is meaningless
+	}
+	indexBytes, err := ix.SizeBytes(ctx)
+	if err != nil {
+		return fmt.Errorf("index size: %w", err)
+	}
+	ratio := float64(indexBytes) / float64(logBytes)
+	if ratio > indexSizeWarnRatio {
+		log.Printf("fohlen: WARNING index size (%d bytes) is %.1fx the original log volume (%d bytes), exceeding the %.0fx health-check threshold (doc/audit_engine.md §4.2) — investigate possible duplicate ingestion or parser bug",
+			indexBytes, ratio, logBytes, indexSizeWarnRatio)
+	}
+	return nil
 }
 
-func (d *detectionRing) snapshot() []stats.Detection {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	out := make([]stats.Detection, len(d.items))
-	copy(out, d.items)
-	return out
+func sumLogBytes(logDir string) (int64, error) {
+	entries, err := os.ReadDir(logDir)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), "remote.log") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		total += info.Size()
+	}
+	return total, nil
 }

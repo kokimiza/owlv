@@ -76,6 +76,13 @@ func (in *Ingester) RunCycle(ctx context.Context) ([]stats.Detection, error) {
 	allEvents := append(liveEvents, sealedEvents...)
 	detections = append(detections, in.observe(allEvents, now)...)
 
+	// Persist before returning so the dashboard's detection history
+	// (doc/audit_engine.md §4.4) survives a restart — webhook notification
+	// of these same detections happens separately in main.go's caller.
+	if err := in.Index.InsertDetections(ctx, detections); err != nil {
+		return nil, fmt.Errorf("ingest: persist detections: %w", err)
+	}
+
 	if err := in.checkpoint.Save(in.CheckpointPath); err != nil {
 		return nil, fmt.Errorf("ingest: save checkpoint: %w", err)
 	}

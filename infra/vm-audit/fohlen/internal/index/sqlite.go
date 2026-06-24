@@ -16,6 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"fohlen/internal/event"
+	"fohlen/internal/stats"
 )
 
 const schema = `
@@ -45,6 +46,20 @@ END;
 CREATE TRIGGER IF NOT EXISTS events_ad AFTER DELETE ON events BEGIN
 	INSERT INTO events_fts(events_fts, rowid, message) VALUES ('delete', old.id, old.message);
 END;
+
+-- Persisted statistical detections (doc/audit_engine.md §4.4 dashboard
+-- "直近の逸脱検知イベント一覧"). Without this table the dashboard only ever
+-- showed detections raised since the last process restart, which is not
+-- an acceptable audit trail for a forensics tool.
+CREATE TABLE IF NOT EXISTS detections (
+	id        INTEGER PRIMARY KEY AUTOINCREMENT,
+	timestamp INTEGER NOT NULL,
+	key       TEXT NOT NULL,
+	method    TEXT NOT NULL,
+	value     REAL NOT NULL,
+	message   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_detections_timestamp ON detections(timestamp);
 `
 
 // Index wraps the SQLite connection and the bulk-commit batch size
@@ -163,6 +178,69 @@ func (ix *Index) SizeBytes(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	return pageCount * pageSize, nil
+}
+
+// InsertDetections persists detections raised by one ingest cycle
+// (doc/audit_engine.md §4.3 "実装要件") so the dashboard's detection
+// history survives a restart instead of living only in process memory.
+func (ix *Index) InsertDetections(ctx context.Context, detections []stats.Detection) error {
+	if len(detections) == 0 {
+		return nil
+	}
+	tx, err := ix.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("index: begin detections tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO detections(timestamp, key, method, value, message) VALUES (?, ?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("index: prepare detections insert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, d := range detections {
+		if _, err := stmt.ExecContext(ctx, d.Timestamp.Unix(), d.Key, d.Method, d.Value, d.Message); err != nil {
+			return fmt.Errorf("index: insert detection: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("index: commit detections: %w", err)
+	}
+	return nil
+}
+
+// RecentDetections returns the most recent limit detections, newest first.
+func (ix *Index) RecentDetections(ctx context.Context, limit int) ([]stats.Detection, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := ix.db.QueryContext(ctx,
+		`SELECT timestamp, key, method, value, message FROM detections ORDER BY timestamp DESC, id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("index: recent detections: %w", err)
+	}
+	defer rows.Close()
+
+	var out []stats.Detection
+	for rows.Next() {
+		var (
+			ts                     int64
+			key, method, message   string
+			value                  float64
+		)
+		if err := rows.Scan(&ts, &key, &method, &value, &message); err != nil {
+			return nil, fmt.Errorf("index: scan detection: %w", err)
+		}
+		out = append(out, stats.Detection{
+			Timestamp: time.Unix(ts, 0).UTC(),
+			Key:       key,
+			Method:    method,
+			Value:     value,
+			Message:   message,
+		})
+	}
+	return out, rows.Err()
 }
 
 // DistinctSourceHosts returns every source_host value currently indexed,

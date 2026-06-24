@@ -41,7 +41,7 @@ func newTestServer(t *testing.T) http.Handler {
 	eng := stats.NewEngine(stats.Config{ShewhartSigma: 3, EWMALambda: 0.2, CUSUMK: 0.5, CUSUMH: 5, EntropySurpriseBits: 8})
 	manifestPath := filepath.Join(dir, "sealed-manifest.sha256")
 
-	h, err := New(htpasswdPath, ix, eng, manifestPath, func() []stats.Detection { return nil })
+	h, err := New(htpasswdPath, ix, eng, manifestPath)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

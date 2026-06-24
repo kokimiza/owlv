@@ -133,6 +133,84 @@ func TestEngineIgnoresNonRateMonitoredCategory(t *testing.T) {
 	}
 }
 
+func TestWERTwoOfThreeBeyond2Sigma(t *testing.T) {
+	cases := []struct {
+		name     string
+		history  []float64
+		wantHigh bool
+		wantLow  bool
+	}{
+		{"empty", nil, false, false},
+		{"single high outlier insufficient", []float64{2.5}, false, false},
+		{"two of three high", []float64{1.0, 2.1, 2.2}, true, false},
+		{"two of three low", []float64{-2.1, 0.5, -2.5}, false, true},
+		{"mixed sides does not trigger either", []float64{2.5, -2.5, 0.1}, false, false},
+		{"within window, all three high", []float64{2.1, 2.2, 2.3}, true, false},
+		{"exactly at threshold does not count (strictly greater)", []float64{2.0, 2.0, 2.0}, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			high, low := werTwoOfThreeBeyond2Sigma(tc.history)
+			if high != tc.wantHigh || low != tc.wantLow {
+				t.Errorf("werTwoOfThreeBeyond2Sigma(%v) = (%v,%v), want (%v,%v)", tc.history, high, low, tc.wantHigh, tc.wantLow)
+			}
+		})
+	}
+}
+
+func TestPushZHistoryCapsAtWindowSize(t *testing.T) {
+	var h []float64
+	for i := 1; i <= 5; i++ {
+		h = pushZHistory(h, float64(i))
+	}
+	if len(h) != werWindowSize {
+		t.Fatalf("len(h) = %d, want %d", len(h), werWindowSize)
+	}
+	want := []float64{3, 4, 5} // oldest (1,2) evicted
+	for i, v := range want {
+		if h[i] != v {
+			t.Errorf("h[%d] = %v, want %v", i, h[i], v)
+		}
+	}
+}
+
+func TestEngineDetectsSustainedModerateShiftViaWER(t *testing.T) {
+	eng := NewEngine(Config{ShewhartSigma: 3, EWMALambda: 0.3, CUSUMK: 0.5, CUSUMH: 100 /* disable CUSUM for this test */, EntropySurpriseBits: 8})
+	key := RateKey{SourceHost: "ap_vm", Category: event.AuthFailure}
+	now := time.Now()
+
+	// A large baseline (30 samples) so that a handful of anomalous points
+	// barely move the cumulative Welford mean/stddev — with a small baseline,
+	// each anomalous sample drags the "normal" baseline toward itself almost
+	// immediately, which is precisely why CUSUM (not z-score) is the right
+	// tool for a truly sustained drift (doc/audit_engine.md §4.3). This test
+	// targets the WER rule's actual niche: a short run of moderate (2σ–3σ)
+	// points that individually never trip the harder single-point 3σ rule.
+	for i := 0; i < 10; i++ {
+		eng.ObserveCategoryCount(key, 10, now)
+		eng.ObserveCategoryCount(key, 11, now)
+		eng.ObserveCategoryCount(key, 9, now)
+	}
+
+	// A moderate shift (z ≈ 2.4, between 2σ and 3σ) that should trip the
+	// "2 of 3 beyond 2σ" rule without ever tripping the single-point 3σ rule.
+	var sawWER bool
+	for i := 0; i < 3; i++ {
+		dets := eng.ObserveCategoryCount(key, 12, now)
+		for _, d := range dets {
+			if d.Method == "wer-2of3" {
+				sawWER = true
+			}
+			if d.Method == "zscore" {
+				t.Errorf("single-point 3sigma rule fired for a moderate shift, test setup needs a smaller shift: %+v", d)
+			}
+		}
+	}
+	if !sawWER {
+		t.Fatal("expected Western Electric 2-of-3 rule to fire for a sustained moderate shift")
+	}
+}
+
 func TestEngineSnapshotRoundTrip(t *testing.T) {
 	eng := NewEngine(Config{ShewhartSigma: 3, EWMALambda: 0.3, CUSUMK: 0.5, CUSUMH: 5, EntropySurpriseBits: 8})
 	key := RateKey{SourceHost: "ap_vm", Category: event.AuthFailure}

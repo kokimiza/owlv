@@ -5,23 +5,26 @@
 <body>
 {{template "nav" .}}
 <h1>検索</h1>
-<form hx-get="/partials/search" hx-target="#search-results" hx-trigger="submit, change">
-  <label>キーワード (FTS5): <input type="text" name="q" value="{{.Filter.Keyword}}"></label>
+<form id="search-form" hx-get="/partials/search" hx-target="#search-results" hx-trigger="submit, change">
+  <label>キーワード (FTS5): <input type="text" name="q" value="{{.RawFilter.Keyword}}"></label>
   <label>送信元ホスト:
     <select name="source_host">
       <option value="">(any)</option>
-      {{range .SourceHosts}}<option value="{{.}}" {{if eq . $.Filter.SourceHost}}selected{{end}}>{{.}}</option>{{end}}
+      {{range .SourceHosts}}<option value="{{.}}" {{if eq . $.RawFilter.SourceHost}}selected{{end}}>{{.}}</option>{{end}}
     </select>
   </label>
   <label>カテゴリ:
     <select name="category">
       <option value="">(any)</option>
-      {{range .Categories}}<option value="{{.}}" {{if eq . $.Filter.Category}}selected{{end}}>{{.}}</option>{{end}}
+      {{range .Categories}}<option value="{{.}}" {{if eq . $.RawFilter.Category}}selected{{end}}>{{.}}</option>{{end}}
     </select>
   </label>
+  <label>開始: <input type="datetime-local" name="from" value="{{.RawFilter.From}}"></label>
+  <label>終了: <input type="datetime-local" name="to" value="{{.RawFilter.To}}"></label>
+  <input type="hidden" name="page" value="0">
   <button type="submit">検索</button>
 </form>
-<div id="search-results" hx-get="/partials/search" hx-trigger="load" hx-include="closest form">
+<div id="search-results" hx-get="/partials/search" hx-trigger="load" hx-include="#search-form">
   検索条件を指定してください。
 </div>
 </body>
@@ -43,4 +46,15 @@
   <tr><td colspan="5">該当する結果がありません。</td></tr>
   {{end}}
 </table>
+<div class="pagination">
+  {{if .HasPrev}}
+  <button hx-get="/partials/search" hx-target="#search-results" hx-include="#search-form"
+          hx-vals='{"page": {{printf "%d" (sub .Page 1)}}}'>« 前へ</button>
+  {{end}}
+  <span>ページ {{printf "%d" (add1 .Page)}}</span>
+  {{if .HasNext}}
+  <button hx-get="/partials/search" hx-target="#search-results" hx-include="#search-form"
+          hx-vals='{"page": {{printf "%d" (add1 .Page)}}}'>次へ »</button>
+  {{end}}
+</div>
 {{end}}

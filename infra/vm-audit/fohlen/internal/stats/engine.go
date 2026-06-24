@@ -38,6 +38,14 @@ type RateState struct {
 	Welford Welford
 	EWMA    *EWMA
 	CUSUM   *CUSUM // nil for categories not in cusumMonitored
+
+	// RecentZ holds the last werWindowSize z-scores (oldest first), used by
+	// the Western Electric "2 of 3" rule (doc/audit_engine.md §4.3 table
+	// cites Western Electric Rules alongside the plain 3σ check). A single
+	// 3σ outlier and a "2 of the last 3 beyond 2σ on the same side" pattern
+	// are different anomaly shapes — the latter catches a sustained-but-
+	// moderate shift that never crosses the harder 3σ bar on any one point.
+	RecentZ []float64
 }
 
 // Detection is one statistically-flagged deviation, ready to hand to the
@@ -154,6 +162,19 @@ func (e *Engine) ObserveCategoryCount(key RateKey, count float64, t time.Time) [
 			Message: fmt.Sprintf("%s: count=%.0f is %.1fσ from baseline mean=%.2f", key, count, z, st.Welford.Mean),
 		})
 	}
+	if st.Welford.N >= 2 {
+		st.RecentZ = pushZHistory(st.RecentZ, z)
+		if high, low := werTwoOfThreeBeyond2Sigma(st.RecentZ); high || low {
+			side := "上方"
+			if low {
+				side = "下方"
+			}
+			detections = append(detections, Detection{
+				Key: key.String(), Method: "wer-2of3", Value: z, Timestamp: t,
+				Message: fmt.Sprintf("%s: 直近3点中2点以上が%s2σを超える持続的なズレ (Western Electric rule, 単発の3σ未満でも検知)", key, side),
+			})
+		}
+	}
 	st.Welford.Update(count)
 
 	ewmaVal := st.EWMA.Update(count)
@@ -212,6 +233,43 @@ func abs(x float64) float64 {
 		return -x
 	}
 	return x
+}
+
+// werWindowSize/werHitsRequired/werSigmaThreshold implement the Western
+// Electric "2 of 3" rule: 2 of the last 3 consecutive points more than 2
+// standard deviations from the centerline, on the same side
+// (doc/audit_engine.md §4.3 table; Shewhart's 3σ single-point rule is
+// checked separately in ObserveCategoryCount).
+const (
+	werWindowSize     = 3
+	werHitsRequired   = 2
+	werSigmaThreshold = 2.0
+)
+
+// pushZHistory appends z to history, keeping only the most recent
+// werWindowSize entries (oldest first).
+func pushZHistory(history []float64, z float64) []float64 {
+	history = append(history, z)
+	if len(history) > werWindowSize {
+		history = history[len(history)-werWindowSize:]
+	}
+	return history
+}
+
+// werTwoOfThreeBeyond2Sigma reports whether at least werHitsRequired of the
+// points in history exceed werSigmaThreshold on the high side (high) or the
+// low side (low).
+func werTwoOfThreeBeyond2Sigma(history []float64) (high, low bool) {
+	var hi, lo int
+	for _, z := range history {
+		switch {
+		case z > werSigmaThreshold:
+			hi++
+		case z < -werSigmaThreshold:
+			lo++
+		}
+	}
+	return hi >= werHitsRequired, lo >= werHitsRequired
 }
 
 // RateSummary is the UI-facing view of one RateKey's current statistics
@@ -281,12 +339,13 @@ type snapshot struct {
 }
 
 type rateSnap struct {
-	Welford     Welford `json:"welford"`
-	EWMA        float64 `json:"ewma"`
-	EWMAInit    bool    `json:"ewma_init"`
-	HasCUSUM    bool    `json:"has_cusum"`
-	CUSUMSHigh  float64 `json:"cusum_s_high"`
-	CUSUMSLow   float64 `json:"cusum_s_low"`
+	Welford    Welford   `json:"welford"`
+	EWMA       float64   `json:"ewma"`
+	EWMAInit   bool      `json:"ewma_init"`
+	HasCUSUM   bool      `json:"has_cusum"`
+	CUSUMSHigh float64   `json:"cusum_s_high"`
+	CUSUMSLow  float64   `json:"cusum_s_low"`
+	RecentZ    []float64 `json:"recent_z"`
 }
 
 // MarshalJSON serializes the full engine state.
@@ -307,7 +366,7 @@ func (e *Engine) MarshalJSON() ([]byte, error) {
 		UnclassifiedEWMA:    e.unclassifiedEWMA.Value,
 	}
 	for k, st := range e.rates {
-		rs := rateSnap{Welford: st.Welford, EWMA: st.EWMA.Value, EWMAInit: st.EWMA.Initialized}
+		rs := rateSnap{Welford: st.Welford, EWMA: st.EWMA.Value, EWMAInit: st.EWMA.Initialized, RecentZ: st.RecentZ}
 		if st.CUSUM != nil {
 			rs.HasCUSUM = true
 			rs.CUSUMSHigh = st.CUSUM.SHigh
@@ -342,7 +401,7 @@ func LoadEngine(data []byte) (*Engine, error) {
 	e.unclassifiedEWMA.Initialized = true
 
 	for k, rs := range s.Rates {
-		st := &RateState{Welford: rs.Welford, EWMA: &EWMA{Lambda: e.ewmaLambda, Value: rs.EWMA, Initialized: rs.EWMAInit}}
+		st := &RateState{Welford: rs.Welford, EWMA: &EWMA{Lambda: e.ewmaLambda, Value: rs.EWMA, Initialized: rs.EWMAInit}, RecentZ: rs.RecentZ}
 		if rs.HasCUSUM {
 			st.CUSUM = &CUSUM{K: e.cusumK, H: e.cusumH, SHigh: rs.CUSUMSHigh, SLow: rs.CUSUMSLow}
 		}
