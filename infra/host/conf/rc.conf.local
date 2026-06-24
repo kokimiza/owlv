@@ -5,8 +5,12 @@ vmd_flags=""    # 仮想マシンデーモン
 pf=YES          # パケットフィルタ (無効化禁止)
 ntpd_flags="-s" # 起動時のみ時刻同期
 
-# SSH: 原則無効 (§5) — yubikey-setup.sh 完了後に無効化する
-sshd=NO
+# SSH: Yubikey セットアップ完了まではここで維持する (provision.sh 参照)。
+# yubikey-setup.sh が接続確認後に「完全無効化」を選んだ場合のみ、この行を
+# sed で sshd=NO に書き換える (§5: 原則無効化、管理は物理コンソールのみ)。
+# ここを静的に NO にすると Yubikey が届く前の初回プロビジョニング直後の
+# 再起動で sshd が一切起動せず、管理者が即ロックアウトされる (実際に発生)。
+sshd=YES
 
 httpd=NO
 ftpd=NO
