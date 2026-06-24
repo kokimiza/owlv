@@ -8,8 +8,11 @@ import Core.FixedAssetSpec qualified
 import Core.FxRateSpec qualified
 import Core.JournalSpec qualified
 import Core.JudgmentLogSpec qualified
+import Core.LaborSpec qualified
+import Core.ManagementAccountingSpec qualified
 import Core.MasterSpec qualified
 import Core.MaterialitySpec qualified
+import Core.ProjectSpec qualified
 import Core.SettlementSpec qualified
 import Core.TenantSpec qualified
 import Core.UserSpec qualified
@@ -30,4 +33,7 @@ main =
       , Core.ClosingSpec.tests
       , Core.UserSpec.tests
       , Core.TenantSpec.tests
+      , Core.ProjectSpec.tests
+      , Core.LaborSpec.tests
+      , Core.ManagementAccountingSpec.tests
       ]
