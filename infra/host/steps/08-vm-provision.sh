@@ -36,6 +36,24 @@ _vm_provision() {
 		_info "警告: /etc/owlv/release-signify.pub が未生成 (01-host-foundation.sh 未実行?)。署名検証が必要な VM では後で再配置が必要です"
 	fi
 
+	# Audit VM 専用の読み取り専用 Forgejo トークン (doc/audit_engine.md §10)。
+	# vm-git の REQUIRE_SIGNIN_VIEW=true により匿名API呼び出し・リリース資産の
+	# 匿名ダウンロードは共に拒否される (実際に発生: releases 一覧取得が
+	# "Only signed in user is allowed to call APIs." で 403)。write:repository
+	# を持つ forgejo_token (deploy-poll 用) とは別に、read:repository のみの
+	# トークンを Audit VM だけに配る (他 VM には不要な秘密を増やさない)。
+	# vm-git は呼び出し順で vm-audit より先に provision されるため、この時点で
+	# 既にホスト側に書き込まれている。
+	if [ "$vmname" = "vm-audit" ]; then
+		if [ -f /etc/owlv/audit_releases_token ]; then
+			scp -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -q \
+				/etc/owlv/audit_releases_token "root@${vmip}:/provision/audit-releases-token"
+			_info "audit-releases-token を配布"
+		else
+			_info "警告: /etc/owlv/audit_releases_token が未生成 (vm-git のプロビジョニングが先に完了している必要があります)。fohlen は匿名アクセスを試行し 403 になります"
+		fi
+	fi
+
 	# DR バックアップ鍵を authorized_keys に追加 (owl-control.sh 用)
 	_log "[${vmname}] DR バックアップ鍵を authorized_keys に追加..."
 	ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
@@ -112,6 +130,16 @@ _vm_provision() {
 			_ok "[vm-git] deploy-poll トークンを /etc/owlv/forgejo_token へ配置"
 		else
 			_info "[vm-git] 警告: deploy-poll トークンを取得できませんでした。setup.sh の出力を確認してください"
+		fi
+
+		AUDIT_RELEASES_TOKEN=$(printf '%s\n' "$SETUP_OUTPUT" | awk -F= '/^AUDIT_RELEASES_TOKEN=/{print $2; exit}')
+		if [ -n "$AUDIT_RELEASES_TOKEN" ]; then
+			install -d -m 700 /etc/owlv
+			printf '%s' "$AUDIT_RELEASES_TOKEN" >/etc/owlv/audit_releases_token
+			chmod 600 /etc/owlv/audit_releases_token
+			_ok "[vm-git] Audit VM 用読み取り専用トークンを /etc/owlv/audit_releases_token へ配置"
+		else
+			_info "[vm-git] 警告: Audit VM 用トークンを取得できませんでした。fohlen は匿名アクセスを試行し 403 になります"
 		fi
 	fi
 
