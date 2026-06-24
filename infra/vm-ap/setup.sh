@@ -436,7 +436,20 @@ rc_cmd "$1"
 EOF
 chmod 755 /etc/rc.d/owlv_projector
 rcctl enable owlv_projector
-_ok "owlv-projector rc.d サービス登録 (db-secrets-rotate.sh 完了後に起動すること)"
+# 上記の SSH 設定で PermitRootLogin no + AllowGroups owl-operators
+# owl-maintainers を適用したため、root はこの後二度と SSH でログインできない
+# (vm-audit と同じ理由)。host/steps/08-vm-provision.sh の汎用後処理 (完了マーカー
+# 書き込み・使い捨てプロビジョニング鍵の削除) は root@<vm> への事後 SSH を前提に
+# しており、PermitRootLogin no の VM では実行できないため (実際に発生:
+# "Permission denied (publickey)")、この VM では自分自身で完結させる。
+# 現在実行中のこの SSH セッション自体は設定反映前に確立済みなので生き続ける。
+date >/provision/.owl-provisioned
+if [ -f /root/.ssh/authorized_keys ]; then
+	grep -v 'owl-prov-' /root/.ssh/authorized_keys >/root/.ssh/ak.tmp || true
+	mv /root/.ssh/ak.tmp /root/.ssh/authorized_keys
+	chmod 600 /root/.ssh/authorized_keys
+fi
+_ok "完了マーカー作成 + プロビジョニング鍵削除 (自己処理)"
 
 _log "AP VM セットアップ完了"
 echo ""

@@ -148,26 +148,26 @@ _vm_provision() {
 	# 読み込み経路を持たない、infra/vm-audit/setup.sh 参照)。そのため以下の
 	# 事後 SSH 呼び出しは setup.sh 自身がロックダウン前に既に行っており、
 	# host 側から追って実行することはできない (実際に発生: ssh timeout)。
-	if [ "$vmname" = "vm-audit" ]; then
+	#
+	# vm-ap は setup.sh 内で sshd に PermitRootLogin no + AllowGroups
+	# owl-operators owl-maintainers を適用するため、setup.sh 完了後は root が
+	# 二度とログインできない (実際に発生: "Permission denied (publickey)")。
+	# ポートも APP_SSH_PORT (既定 8022) に変わっているため、ポートを合わせても
+	# root ログイン自体が拒否される点は変わらない。vm-audit と同様、setup.sh
+	# 自身が末尾で完了マーカー作成・使い捨て鍵削除を自己処理している。
+	if [ "$vmname" = "vm-audit" ] || [ "$vmname" = "vm-ap" ]; then
 		_log "[${vmname}] プロビジョニング完了 (完了マーカー/鍵削除は setup.sh が自己処理済み)"
 		_ok "${vmname} 完了"
 		return
 	fi
 
-	# vm-ap は setup.sh 内で sshd を APP_SSH_PORT (既定 8022) に切り替えるため、
-	# setup.sh 実行後の事後 SSH 呼び出しはポート 22 では繋がらない (実際に発生:
-	# "Connection refused" でプロビジョニング全体が失敗していた)。他 VM は
-	# sshd のポートを変更しないため 22 のまま。
-	local sshport=22
-	[ "$vmname" = "vm-ap" ] && sshport="${APP_SSH_PORT:-8022}"
-
 	# /provision/ はこの関数の先頭で作成済みなので全 VM で存在が保証されている。
-	ssh -p "$sshport" -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
+	ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
 		"date > /provision/.owl-provisioned"
 
 	# プロビジョニング用の使い捨て鍵を VM から削除
 	_log "[${vmname}] プロビジョニング鍵を VM から削除..."
-	ssh -p "$sshport" -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" "
+	ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" "
         grep -v 'owl-prov-' /root/.ssh/authorized_keys > /root/.ssh/ak.tmp || true
         mv /root/.ssh/ak.tmp /root/.ssh/authorized_keys
         chmod 600 /root/.ssh/authorized_keys
