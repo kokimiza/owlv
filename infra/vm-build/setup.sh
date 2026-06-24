@@ -241,7 +241,7 @@ rc_cmd $1
 EOF
 chmod 755 /etc/rc.d/forgejo_runner
 # ── オフライン Runner 登録 (Web UI 不要) ─────────────────────
-# vm-git/setup.sh で forgejo forgejo-cli actions register --labels 'openbsd,haskell'
+# vm-git/setup.sh で forgejo forgejo-cli actions register --labels 'openbsd:host,haskell:host,go:host'
 # が完了している前提。ラベルはその登録時点でシークレットに紐づいてサーバー側に
 # 確定済みであり、create-runner-file (オフライン登録、ネットワーク接続不要) は
 # 同じシークレットに対応する .runner ファイルをローカルに生成するだけなので
