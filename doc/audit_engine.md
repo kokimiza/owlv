@@ -7,7 +7,7 @@
 1. **全文検索**: 蓄積された `remote.log` および封印済み `.gz` 世代を横断して、任意の文字列・時間範囲で検索する手段がない。
 2. **逸脱検知の質**: `owl-audit-detect.sh`（§6.2 実装）は固定閾値の `grep` カウントのみであり、統計的根拠を持たない。
 
-本書はこの2点を解決する常駐サービス **`fohlen`**（[infra/vm-audit/fohlen/](../infra/vm-audit/fohlen/)、Go 製・単一静的バイナリ）の要件を定義する。命名は実装済みディレクトリ名を採用する。
+本書はこの2点を解決する常駐サービス **`fohlen`**（[infra/vm-audit/fohlen/](../infra/vm-audit/fohlen/)、Go 製・単一静的バイナリ）の要件を定義する。
 
 ### 0.1 採用しないものとその理由
 
@@ -155,7 +155,7 @@ const (
 
 - 各手法はカテゴリキー(`(SourceHost, Category)` の組)ごとに独立した状態（平均・分散・EWMA値・CUSUM累積値・頻度表）を持ち、`AuditEvent` 1件ごとに定数時間で更新する。履歴イベントの再走査は不要（オンラインアルゴリズムの定義そのもの）。
 - 状態は `/var/db/fohlen/state/stats.json`（または同等の永続化）に定期保存し、`fohlen` 再起動時に学習をやり直さない。
-- 各手法の閾値（σ係数、CUSUM の許容偏差 `k` と検出閾値 `h`、EWMA の減衰係数 `λ`）は設定ファイル（`/etc/owlv/fohlen.toml` 等、`owl-config.toml` の `[audit]` セクションを拡張する形を想定）で調整可能にする。初期値は実機収集後に経験的に校正する（§9 残課題）。
+- 各手法の閾値（σ係数、CUSUM の許容偏差 `k` と検出閾値 `h`、EWMA の減衰係数 `λ`）は設定ファイル（`/etc/owlv/fohlen.toml` 等、`owl-config.toml` の `[audit]` セクションを拡張する形を想定）で調整可能にする。初期値は実機収集後に経験的に校正する（§10 残課題）。
 - 逸脱検知時は §6.2 の既存方針を踏襲し、検知〜webhook送信を `fohlen` 内で完結させる。送信先は既存の `/etc/owlv/audit-notify-webhook` と `<audit_notify_dst>` をそのまま再利用し、新たな通知経路を増設しない。
 
 ### 4.4 配信（htmx UI）
@@ -249,17 +249,60 @@ OpenBSD `pledge`/`unveil` の適用方針は既存の owlv アプリ（[cqrs.md 
 - **取り込みの冪等性テスト**: 同じ `.gz` 世代を2回取り込み手続きに通しても索引が重複しないこと（[cqrs.md §9](cqrs.md)「同じイベント列を2回プロジェクションしても結果が一致する」と同型のテスト）。
 - **クラッシュ復旧テスト**: 取り込み中（チェックポイント更新前）にプロセスを `kill -9` し、再起動後に取りこぼし・重複が発生しないこと。
 - **権限境界テスト**: `_fohlen` ユーザーで `/var/log/audit/remote.log` への書き込みを試み、拒否されることを確認する（OSレベルのパーミッションのみで成立させ、アプリ側のチェックに依存しない設計であることの確認）。
-- **pf.conf 整合性テスト**: §6.1 の新規ルール適用後も、audit_lan から internal_lan/dev_lan への到達性が依然ゼロであることを [pentest_spec.md §1, §3-2](pentest_spec.md) の既存手順（`ping`/`nc -zv` による到達性確認）で再検証する。本書による変更が鉄則①を破っていないことを実機で確認する作業は、`fohlen` 実装完了後に pentest_spec.md へ新規テストIDとして追記する（§9 残課題）。
+- **pf.conf 整合性テスト**: §6.1 の新規ルール適用後も、audit_lan から internal_lan/dev_lan への到達性が依然ゼロであることを [pentest_spec.md §1, §3-2](pentest_spec.md) の既存手順（`ping`/`nc -zv` による到達性確認）で再検証する。本書による変更が鉄則①を破っていないことを実機で確認する作業は、`fohlen` 実装完了後に pentest_spec.md へ新規テストIDとして追記する（§10 残課題）。
 
 ---
 
-## 9. 残課題
+## 9. デプロイ（CI/CD、§3「残課題」の解決）
 
-- **UI ポート番号の確定**: 本書は `9090` を仮の値として記載した。実際の割り当て時は他サービスとの衝突がないことを確認し、`owl-config.toml` の `[audit]` セクションへ正式に記載する。
+owlv 本体（AP VM）は [dev_sec_ops.md §4.2](dev_sec_ops.md) のプル型デプロイ（ホストが `deploy-poll` で定期検知 → AP VM へ SSH 経由でデプロイ指示 → AP VM が Git VM から自発的プル）を採用している。`fohlen` には同じ経路を**そのまま使えない**。理由は本書 §1 の制約条件そのものである。
+
+- Audit VM は鉄則①（[dev_sec_ops.md §6.1](dev_sec_ops.md)）により dev_lan（Git VM）への通信を構造的に持たない。AP VM のように自分自身が Git VM からバイナリを取得しに行くことができない。
+- Audit VM は [setup.sh](../infra/vm-audit/setup.sh) の末尾で自分自身の `pf.conf` を `chflags schg` 付きで default-deny に固定し、SSH 受信を含めて永久に自己ロックダウンする（§6.3）。ホストが AP/DB/Git/Build VM に対して行っている「ホスト → VM への恒久 SSH ルール」（[pf.conf](../infra/host/conf/pf.conf) の `pass out on $int_veth ... port 22` 等）に相当するものを Audit VM には張れない。
+
+したがって `fohlen` の配信は **継続稼働中の `owl-control.sh deploy-poll`（cron 5分間隔）の対象から明示的に除外**し、代わりに **`infra/vm-audit/setup.sh` 自身（再実行可能な冪等スクリプト）が、プロビジョニング実行中——[04-pf-nat.sh](../infra/host/steps/04-pf-nat.sh) が一時的に audit_lan↔dev_lan を開けている、本番封鎖（[09-lockdown.sh](../infra/host/steps/09-lockdown.sh)）より前の時間帯——に Git VM のリリースレジストリから直接取得・検証・配置する**。これは「すべてベアメタルフルオートレストアの精神で `provision.sh` 内で実行される」という本プロジェクトの infra 方針（[CLAUDE.md](../CLAUDE.md)）にも合致する。再プロビジョニング（`setup.sh` の再実行）が `fohlen` の更新手段になる。
+
+```
+[Build VM の Forgejo Runner] ──push/merge──▶ build-fohlen.yml (infra/vm-git/)
+    go vet / gofmt / go build / go test
+    main へのマージ時のみ: タグ "fohlen-vX.Y.Z-<sha>" を付与
+    fohlen-openbsd-amd64 + manifest.txt (未署名) を draft=true で Git VM へ
+                                                          │
+                                                          ▼ (既存の恒久ルール、§1.1.1)
+[ホスト: owl-control.sh sign-poll] ──既存ロジックをそのまま再利用──▶
+    owlv 本体・fohlen を区別せず、draft=true の manifest.txt を検知して
+    ホスト保持の signify 秘密鍵で署名 → draft=false へ
+                                                          │
+                                                          ▼
+[ホスト: owl-control.sh deploy-poll] ──tag が "fohlen-*" の場合のみ分岐──▶
+    cmd_deploy(AP VM への SSH push)を呼ばず、既デプロイ台帳に記録するだけで
+    スキップする(Audit VM へは構造的に push できないため)
+                                                          │
+                                                          ▼ (再プロビジョニング時のみ到達)
+[vm-audit/setup.sh] (provision.sh STEP 8、本番封鎖前)
+    1. Git VM の Releases API を "fohlen-" タグでフィルタし最新の draft=false を取得
+    2. signify -V で /provision/release-signify.pub により manifest.txt を検証
+    3. manifest.txt の uname_r と本機 uname -r の一致を検証
+    4. fohlen-openbsd-amd64 の SHA256 が manifest.txt と一致することを検証
+    5. 三重検証合格時のみ /usr/local/bin/fohlen_<tag> に配置しシンボリックリンク切替
+    6. _fohlen サービスアカウント・/var/db/fohlen・rc.d 登録・起動
+```
+
+**signify 公開鍵の配布**: owlv 本体は AP VM への配置を「手動」としているが（[dev_sec_ops.md §4.2](dev_sec_ops.md) 手順3）、`fohlen` ではこの手動配置を `provision.sh` 自身に自動化した — [08-vm-provision.sh](../infra/host/steps/08-vm-provision.sh) が全 VM への通常のファイル転送に続けて `/etc/owlv/release-signify.pub`（公開鍵であり秘匿性は不要）を `/provision/release-signify.pub` として配布する。AP VM 側の手動配置を置き換えるものではない（両者は独立に存在してよい）。
+
+**タグの名前空間分離**: owlv 本体のタグは `vX.Y.Z-<sha>`（[owlv.cabal](../owlv.cabal) の `version:` 由来）、`fohlen` のタグは `fohlen-vX.Y.Z-<sha>`（[infra/vm-audit/fohlen/VERSION](../infra/vm-audit/fohlen/VERSION) 由来）とし、同一 Forgejo リポジトリ内で衝突しないようにする。`sign-poll` は両者を区別せず一律に署名する（ホストは全成果物の唯一の信頼の根であり、対象を区別する理由がない）。`deploy-poll` は `fohlen-*` 接頭辞でのみ分岐する。
+
+**Build VM のツールチェーン共存**: [vm-build/setup.sh](../infra/vm-build/setup.sh) は元々 `forgejo-runner` 自身を Go でビルドするため `pkg_add go` を行っていたが、`forgejo-runner` バイナリが既存の場合はその工程自体をスキップしていた。`fohlen` の CI は再実行のたびに `go` を必要とするため、`pkg_add go` をその条件分岐の外側（GHC と同じく無条件の位置）へ移した。Forgejo Runner には `go:host` ラベルを追加登録し、同一 Runner（capacity: 2）が `haskell:host`（owlv 本体）と `go:host`（fohlen）の両ジョブを処理する。
+
+**ネットワーク到達性の補足修正**: 本書 §6.1 はホストから `audit_vm:9090` への到達を許可する pf ルールを提案していたが、実際の [pf.conf](../infra/host/conf/pf.conf) には未反映だった。今回これを追加し、合わせて `vm-audit/setup.sh` が書き込む Audit VM 自身の `/etc/pf.conf`（§6.3 の二重防御層）にも対になる `pass in proto tcp to port 9090` を追加した — ホスト側のみを許可しても、ゲスト自身の default-deny がポート 9090 を遮断したままでは UI に到達できないため、両方が揃って初めて意図通りに機能する。
+
+---
+
+## 10. 残課題
+
 - **統計手法の閾値校正**: §4.3 のσ係数・CUSUM の `k`/`h`・EWMA の `λ` は実機のログ収集後に経験的に決める。初期値は保守的（誤検知を許容し見逃しを避ける）に設定し、運用しながら調整する。
-- **Basic認証の認証情報のローテーション運用**: [pentest_spec.md §11](pentest_spec.md) のポストテスト手順と同様、定期ローテーションの運用規律を別途定める。
+- **Basic認証の認証情報のローテーション運用**: [pentest_spec.md §11](pentest_spec.md) のポストテスト手順と同様、定期ローテーションの運用規律を別途定める。`fohlen genpasswd <user> <htpasswd-file>` で既存ユーザーのパスワードを再生成できる（旧パスワードは即時失効）。
 - **pentest_spec.md への新規テストケース追加**: §6.1 の新規 pf.conf ルールと §6.2 のホスト鍵制限が実機で意図通り機能するかを検証するテストIDを、`fohlen` 実装完了後に [pentest_spec.md](pentest_spec.md) へ追記する。
-- **Build VM への `go` ツールチェーン追加**: [vm-build/setup.sh](../infra/vm-build/setup.sh) は現在 GHC のみを対象にしている。`fohlen` のビルドのため `lang/go` の導入と、GHC と同様の「無印パッケージをインストールし、事後検証でバージョン下限を確認する」方式（[dev_sec_ops.md §3.1](dev_sec_ops.md) 既述の `sysupgrade` 後の版番消失対策）を Go にも適用する設計を別途行う。
-- **デプロイ経路**: 現状 `owlv-app`/`owlv-batch-center`/`owlv-projector` は [owl-control.sh](../infra/host/sbin/owl-control.sh) `cmd_deploy` の一括取得対象だが、`fohlen` をこの3バイナリと同じデプロイレールに乗せるか、Audit VM 専用の別経路にするかは未決定。Audit VM は internal_lan/dev_lan のいずれにも属さないため、Git VM からの取得経路自体を新設する必要がある点に注意する。
 - **イベント分類ルールテーブルの拡充**: §4.1 の初期セットは既存 `owl-audit-detect.sh` の `grep` パターンをそのまま移植したものに過ぎない。実機ログのレビューを経て `AuthSuccess`/`AuthFailure` 以外のカテゴリ追加、メッセージ文言の揺れ(OpenBSDバージョン差異、[setup.sh](../infra/vm-audit/setup.sh) の検証注記と同じ懸念)への対応が必要。
 - **`modernc.org/sqlite` のメモリチューニング値の実測確定**: §4.2 のバルクコミット件数(目安2000行)・`cache_size`(目安-2000)は実機ベンチマーク前の暫定値。256MB環境での実際のRSSピークを `vmstat`/`top` で観測し、GCスパイクが許容範囲(他サービスの動作に影響しない水準)に収まることを確認した上で確定する。
+- **初回配置の手順**: §9 のデプロイ経路は Build VM の CI が一度も走っていない（または Git VM が DR 復元直後で `forgejo dump` を未だ復元していない）状態では「署名済みリリースなし」として安全にスキップする。実機での初回導入時は、(a) 実際に owlv リポジトリへ何らかの差分を push して `build-fohlen.yml` を一度走らせる、(b) `owl-control.sh sign-poll` の cron 周期(5分)を待つ、(c) `vm-audit/setup.sh` を再実行する、という3段の待ち合わせが発生する。DR 復元時系列（[dev_sec_ops.md §2.4](dev_sec_ops.md) 手順5「Git VM へ forgejo dump を復元する」は手順3「プロビジョニング」より後）との整合も含め、運用手順書側に明記する。
