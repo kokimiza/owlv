@@ -13,7 +13,7 @@ BACKUP_KEY=/etc/owlv/backup_ed25519
 SIGNIFY_SEC=/etc/owlv/release-signify.sec
 
 LOCKFILE=/tmp/owl-dr.lock
-LOGDIR=/var/log/owl
+LOGDIR=/var/log/owlv
 HOLD_FILE=/etc/owlv/INTEGRITY_HOLD
 DEPLOYED_LOG=/etc/owlv/deployed_tags
 

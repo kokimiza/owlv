@@ -6,7 +6,7 @@ set -eu
 
 BASELINE=/etc/owlv/integrity-baseline.sha256
 HOLD_FILE=/etc/owlv/INTEGRITY_HOLD
-LOGDIR=/var/log/owl
+LOGDIR=/var/log/owlv
 # POSIX sh では ${$(date ...)} は無効。必ず別行で代入する
 DIFF_TS="$(date +%Y%m%d_%H%M%S)"
 DIFF_FILE="${LOGDIR}/integrity-diff-${DIFF_TS}.txt"
