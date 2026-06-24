@@ -7,7 +7,7 @@
 1. **全文検索**: 蓄積された `remote.log` および封印済み `.gz` 世代を横断して、任意の文字列・時間範囲で検索する手段がない。
 2. **逸脱検知の質**: `owl-audit-detect.sh`（§6.2 実装）は固定閾値の `grep` カウントのみであり、統計的根拠を持たない。
 
-本書はこの2点を解決する常駐サービス **`fohlen`**（[infra/vm-audit/fohlen/](../infra/vm-audit/fohlen/)、Go 製・単一静的バイナリ）の要件を定義する。
+本書はこの2点を解決する常駐サービス **`fohlen`**（[infra/vm-audit/fohlen/](../infra/vm-audit/fohlen/)、Go 製・単一静的バイナリ）の要件を定義する。命名は実装済みディレクトリ名を採用する。
 
 ### 0.1 採用しないものとその理由
 
@@ -24,18 +24,60 @@
 
 そこで fohlen は、生ログ行をいきなり索引・統計の対象にするのではなく、**まず「これは何が起きたイベントか」を分類する正規化層（§4.1）を挟む**。検索・統計・UI はこの正規化済みイベント（`AuditEvent`）を主たる入力とし、生文字列はその補助（全文検索のフォールバック対象、分類できなかった行の取りこぼし防止）として扱う。これにより、たとえば「sudo失敗が3回連続」という構文的カウントではなく「`PrivilegeEscalationAttempt` という意味カテゴリの事象率が普段と異なる」という**意味のある単位**で統計を取れるようになる。これが「ログ管理」から「イベントを理解する監査エンジン」への一段の抽象化である。
 
+### 0.3 三つの責務（本書全体を貫く設計原則）
+
+fohlen の責務は次の3つに分解できる。以降の各章は、すべてこのいずれか（あるいは複数）に対応づけられる。責務の境界を曖昧にした機能追加（例: fohlen が能動的に他segmentへ問い合わせる、書き込み経路を持つ等）は、たとえ便利であっても §2.2 のスコープ外として拒否する。
+
+1. **受け口（intake）**: internal_lan / dev_lan の全 VM・ホスト自身が `auth.*` ファシリティ経由で一方通行（UDP/514、鉄則①）に送り込んでくる syslog を、Audit VM の `syslogd`/`newsyslog`（既存・変更なし）を経由して受け取る側。fohlen 自身は受信そのものには関与せず、`/var/log/audit/` に既に書き出された結果を読み取るだけである（§4.1）。「受け口」という言葉が指すのは fohlen ではなく Audit VM 全体のアーキテクチャ上の位置であり、fohlen はその内部に座る分析者にすぎない。
+2. **内部監査室（internal audit chamber）**: 受け取ったログを意味のある単位に正規化し、索引化し、統計的に監視する（§4.1–§4.3）。「内部監査室」という比喩が意味するのは、(a) 外部（internal_lan/dev_lan/インターネット）から一切伺うことができない密室であること（鉄則①により構造的に保証される）、(b) 監査対象（owlv 本体・各 VM）に対して fohlen 自身が何かを書き戻す・指示する経路を一切持たないこと（読み取り専用、§2.2）、(c) 室内の記録（索引・統計状態）自体も `/var/log/audit/` の原本を改変しないことの3点である。
+3. **web（同一 LAN 内限定の閲覧窓口）**: 分析結果を人間が確認できるようにする唯一の経路が htmx UI だが、これは「web に公開する」のではなく「同一 LAN（host が両端に立つ SSH トンネル + ローカルポートフォワード）内に限定して窓口を一つ開ける」という意味でしかない（§6）。インターネットからはもちろん、internal_lan・dev_lan の他 VM からも到達できない。TLS 終端を持たないのは「web として公開していない」ことの裏返りであり、省略ではない。
+
 ---
 
 ## 1. 制約条件（設計の出発点）
 
 | 制約 | 出典 | 設計への影響 |
 |---|---|---|
-| VM メモリ 256MB | `owl-config.toml` `[vm.audit]` | ログ全件をメモリに展開しない。ストリーミング統計（§4.3）・ディスク上の索引（§4.2）を必須とする。 |
-| OpenBSD ネイティブ、Go ツールチェーンは Build VM の `ports` 経由 | [dev_sec_ops.md §3.1](dev_sec_ops.md)（GHC と同じロックステップ運用方針を Go にも適用） | `fohlen` は Build VM 上でクロスビルドせず、Build VM 自身にネイティブ `lang/go` を追加してビルドする。AP VM 同様、Build VM と Audit VM は同一 OpenBSD リリースでロックステップ運用する。 |
+| VM メモリ 256MB | `owl-config.toml` `[vm.audit]`、[vmd.conf](../infra/host/conf/vmd.conf) `vm "vm-audit" { memory 256M }` | ログ全件をメモリに展開しない。ストリーミング統計（§4.3）・ディスク上の索引（§4.2）を必須とする。実測予算は §1.1。 |
+| VM 仮想ディスク 10G | `owl-config.toml` `[vm.audit]`、[05-disks.sh](../infra/host/steps/05-disks.sh) `"audit:10G"` | OS本体・索引・原本ログのすべてがこの単一パーティションに収まる必要がある。実測予算は §1.1。 |
+| VM vCPU 1基（既定値） | [vmd.conf](../infra/host/conf/vmd.conf) は `vm "vm-audit"` に `ncpus` を指定していない（OpenBSD `vmd(8)` の既定は 1） | 並行 goroutine は I/O 待ちの重ね合わせにしかならず、真の並列実行ではない。GC一時停止は単一コアを丸ごと占有するため、§4.2 の明示的 `runtime.GC()` 呼び出しタイミングの制御がより重要になる（他コアでミューテータを進めながら並行GCする余地が無い）。 |
+| OS インストールセットにコンパイラ系を含めない | [install.conf.in](../infra/vm-audit/install.conf.in)・[07-vm-install.sh](../infra/host/steps/07-vm-install.sh) の `vm-audit` 呼び出しは `Set name(s) = -comp* -x* -game* -man* done`（`-comp*` で GHC/cc 等のコンパイラ集合を明示的に除外） | Audit VM 上には **gcc・cc・GHC のいずれも存在しない**。`fohlen` は Build VM で生成した単一の事前ビルド済みバイナリを配置する以外の手段を持たない。cgo を要するライブラリ（C版 SQLite ドライバ等）は採用不可という制約（§4.2 の `modernc.org/sqlite` 選定理由）は、設計判断ではなく**配備先に存在しない**という事実から導かれる。 |
+| OpenBSD ネイティブ、Go ツールチェーンは Build VM の `ports` 経由 | [dev_sec_ops.md §3.1](dev_sec_ops.md)（GHC と同じロックステップ運用方針を Go にも適用）、[vm-build/setup.sh](../infra/vm-build/setup.sh) | `fohlen` は Build VM 上でクロスビルドせず、Build VM 自身の `pkg_add go` でネイティブビルドする（§9）。AP VM 同様、Build VM と Audit VM は同一 OpenBSD リリースでロックステップ運用する。 |
+| プロビジョニング中のみ audit_lan↔dev_lan が一時的に開く | [04-pf-nat.sh](../infra/host/steps/04-pf-nat.sh)（STEP 4、`pass on bridge2 all no state` 等）〜 [09-lockdown.sh](../infra/host/steps/09-lockdown.sh)（STEP 9、本番 pf.conf 適用）の間 | `fohlen` の取得・検証・配置（§9）はこの window 内（STEP 8 の `vm-audit/setup.sh` 実行時）にしか成立しない。本番封鎖後は永久に成立しなくなる——再プロビジョニングが唯一の更新手段になる。 |
 | audit_lan は他segmentへ双方向遮断（鉄則①） | [dev_sec_ops.md §6.1](dev_sec_ops.md) | `fohlen` はいかなる宛先へも能動的に接続しない（webhook 通知のみ例外、既存 `owl-audit-detect.sh` と同じ送信先ホワイトリスト経由）。UI はホスト発の接続のみを受け付ける受動的リスナーとして実装する（§6）。 |
 | ドメインデータ排除（鉄則②） | [dev_sec_ops.md §6.1](dev_sec_ops.md) | 転送されてくる `auth.*` ログにはもともと仕訳金額等のドメインデータが乗らない。`fohlen` 側でも検索対象・索引はこのメタログのみに限定し、将来 owlv アプリ側のログファシリティが誤って転送対象に混入しないことを前提から外さない（混入検知は本書の範囲外、syslog.conf 側の責務）。 |
 | 確定済みログは `sappnd` で封印（§6.3） | [dev_sec_ops.md §6.3](dev_sec_ops.md) | `fohlen` は `/var/log/audit/` に対して**読み取り専用**。索引・状態ファイルは別ディレクトリ（§7）に持ち、封印済みログへの書き込みを一切行わない。 |
 | 単一プロセス内検知（§6.2） | [dev_sec_ops.md §6.2](dev_sec_ops.md)「検知から通報までを単一プロセス内で完結させ、外部キューや中間サーバーを経由しない」 | `fohlen` が新たに行う統計的検知も、検知〜webhook 送信まで自プロセス内で完結させる。既存 `owl-audit-detect.sh`（cron、閾値ベース）とは独立した別チャンネルとして併存させる（§5）。 |
+
+### 1.1 リソース予算（256MB / 10G の内訳）
+
+机上の「256MB だから気をつける」という曖昧な合意ではなく、実際に何が何 MB/GB を占めるかを明文化する。値は実機計測前の設計目標であり、§10 残課題で実測確定する。
+
+**メモリ（256MB総量）**
+
+| 消費者 | 目安 | 備考 |
+|---|---|---|
+| OpenBSD カーネル + base 常駐分（`syslogd`/`cron`/`sshd`/`pf` 等） | 約 30–50MB | `-comp* -x* -game* -man*` を除いた最小構成（§1表）でも base 自体は常駐する。 |
+| `owl-audit-detect.sh` / `owl-audit-seal.sh` | 無視できる(数MB、cron 起動時のみ一時的に存在) | シェルスクリプトでプロセス常駐しない。 |
+| `fohlen`（Go ランタイム本体 + goroutine スタック） | 目標 ≤ 30MB | sqlite/htmx を除いた Go ランタイムの素の足場。 |
+| `modernc.org/sqlite`（ページキャッシュ + 接続状態） | 目標 ≤ 10MB | §4.2 の `PRAGMA cache_size = -2000`(≈2MB) はこの内訳の一部。バルクコミット中の一時オブジェクトは GC 直後に解放される前提（§4.2）。 |
+| 統計エンジンの状態（Welford/EWMA/CUSUM/頻度表 ×カテゴリキー数） | 目標 ≤ 5MB | カテゴリ数は有限（§4.1）かつキー空間は `(source_host, category)` の組のみなので、ホスト数×カテゴリ数のオーダーであり線形にしか増えない。 |
+| htmx 埋め込み資産（`go:embed`） | 約 50KB | バイナリに静的同梱、実行時メモリへの追加負荷はファイルサイズ程度。 |
+| 安全余裕（GCピーク・カーネルバッファの揺らぎ） | 残り ≥ 150MB | 単一 vCPU（§1表）では GC 一時停止中も他コアでミューテータが進めないため、ピーク時の余裕を広めに確保する。 |
+
+合計の目標は「定常時 50–80MB、バルクコミット直後のGCピークでも150MB を恒常的に超えない」。256MB を使い切る設計は許容しない——OS自体・cron スクリプトの存在余地を奪うため。
+
+**ディスク（10G総量）**
+
+| 消費者 | 目安 | 備考 |
+|---|---|---|
+| OS本体（`-comp* -x* -game* -man*` 除外後の base + etc） | 約 0.5–1G | コンパイラ・X11・ゲーム・man を除いた最小構成。 |
+| `/var/log/audit/`（`remote.log` + 30世代 `.gz`） | 運用量に依存、newsyslog の `1024`(KB単位ローテーション閾値、§4.1)×30世代が上限の目安 | 既存 [setup.sh](../infra/vm-audit/setup.sh) の `newsyslog.conf` 設定がこの上限を事実上規定する。fohlen はこれを変更しない。 |
+| `/var/db/fohlen/index.sqlite3` | §4.2 のヘルスチェック上限（原本ログ合計の3倍)を **10G の文脈で具体化すると** 原本ログ想定 1–2G に対し索引 3–6G 程度までは許容、それを超えたら異常 | 「3倍」という相対値だけでは具体的な閾値が見えないため、本欄で絶対値の目安を明示する。 |
+| `/var/db/fohlen/state/`（チェックポイント・統計状態JSON） | 数百KB〜数MB | カテゴリキー数に比例、無限に増えない。 |
+| `fohlen` バイナリ本体 + 旧バージョン（シンボリックリンク切替方式、§9） | 数十MB | `fohlen_<tag>` を世代ごとに残す場合は古いものを手動整理する運用が必要（自動GCは本書の範囲外、§10 残課題）。 |
+
+合計目標は OS+索引+原本ログで 10G の 7–8割を恒常的な上限とし、残りは安全余裕として残す。
 
 ---
 
@@ -83,7 +125,24 @@
 
 ①②の分離が本書の核心である。①は構文(誰がいつどのホストから何という tag で何を言ったか)を分解するだけで意味を判断しない。②が初めて「これは特権昇格の試みである」「これは認証成功である」といった**意味**を割り当てる。③④はいずれも①の生データではなく②の出力(`AuditEvent`)を主たる入力として動作する。
 
-`fohlen` は Audit VM 上で1プロセスのみ起動する（`rcctl` 管理、`pidfile` で多重起動を禁止する既存パターン、[cron_batch.md §1](cron_batch.md) の `_owlbatch` daemon-likeパターンと同型）。専用サービスアカウント `_fohlen`（nologin、doasルールなし）で動作させ、`/var/log/audit` への読み取り権限のみ（グループ `wheel` 経由の読み取りビット、書き込み権限は持たない）と `/var/db/fohlen` への読み書き権限を与える。
+`fohlen` は Audit VM 上で1プロセスのみ起動する（`rcctl` 管理、`pidfile` で多重起動を禁止する既存パターン、[cron_batch.md §1](cron_batch.md) の `_owlbatch` daemon-likeパターンと同型）。専用サービスアカウント `_fohlen`（nologin、doasルールなし）で動作させ、`/var/log/audit` への読み取り権限のみ（専用グループ `owl-audit-read` 経由の読み取りビット、書き込み権限は持たない。`wheel` は使わない——`doas.conf` の `permit persist :wheel` が参照する管理者グループであり、読み取り専用のサービスアカウントをそこへ混在させると権限境界の意図が紛らわしくなるため、§7 で専用グループに分離した）と `/var/db/fohlen` への読み書き権限（オーナー限定、グループアクセスは不要）を与える。
+
+### 3.1 `provision.sh` ライフサイクルとの対応
+
+[infra/provision.sh](../infra/provision.sh) は本システムの唯一の構築経路であり（[CLAUDE.md](../CLAUDE.md) のベアメタルフルオートレストア方針）、`fohlen` のライフサイクルもこの STEP 列の中に完全に位置づけられる。曖昧な「プロビジョニング中」という表現を避け、STEP 番号で固定する。
+
+| STEP | スクリプト | fohlen に関係する事象 |
+|---|---|---|
+| 1 | [01-host-foundation.sh](../infra/host/steps/01-host-foundation.sh) | ホストの signify 鍵ペア生成（§9 で署名検証に使う公開鍵の出生点）。ホスト自身の `auth.*` を Audit VM へ転送する設定もここ。 |
+| 3 | [03-virt-bootstrap.sh](../infra/host/steps/03-virt-bootstrap.sh) | `audit_lan`（`bridge2`/`vether2`）が L2 スイッチとして立ち上がる。`net.link.bridge.pfil_member/pfil_bridge` の sysctl もここで有効化され、以後 audit_lan の L2 トラフィックは必ず pf の評価を通過するようになる（この sysctl が無いと §6 のホスト限定ルールがブリッジ層で素通りしてしまう恐れがある）。 |
+| 4 | [04-pf-nat.sh](../infra/host/steps/04-pf-nat.sh) | **fohlen 取得 window の開始**。暫定 pf+NAT が `audit_lan`↔`dev_lan` を含む全スイッチ間通信を一時的に許可する（`pass on bridge2 all no state` 等）。 |
+| 5 | [05-disks.sh](../infra/host/steps/05-disks.sh) | `audit.img`（10G）作成。§1.1 のディスク予算の前提。 |
+| 6 | [06-sshkeys.sh](../infra/host/steps/06-sshkeys.sh) | プロビジョニング用使い捨て鍵（`PROV_KEY`）生成。Audit VM への初回 SSH 投入に使われ、STEP 8 の末尾で自己破棄される。 |
+| 7 | [07-vm-install.sh](../infra/host/steps/07-vm-install.sh) | Audit VM の OS が `Set name(s) = -comp* -x* -game* -man* done` でインストールされる——コンパイラ非搭載が確定する瞬間（§1表）。 |
+| 8 | [08-vm-provision.sh](../infra/host/steps/08-vm-provision.sh) → [vm-audit/setup.sh](../infra/vm-audit/setup.sh) | `release-signify.pub` 配布 → `vm-audit/setup.sh` 実行（受信設定・検知/封印スクリプト配置 → **fohlen 取得・三重検証・配置**(§9) → `_fohlen`/`owl-audit-read` 作成 → rc.d 登録・起動 → **このVM自身の pf.conf を `chflags schg` で自己ロックダウン**）。fohlen 取得 window の終端はこのスクリプト自身が書く restrictive な pf.conf によって Audit VM 側から先に閉じる。 |
+| 9 | [09-lockdown.sh](../infra/host/steps/09-lockdown.sh) | ホスト側も本番 `pf.conf` に切り替わり、**fohlen 取得 window がホスト側からも閉じる**（STEP 4 の暫定ルールが失効）。同時に `audit-notify-dst` テーブル生成、改ざん検知ベースライン記録。 |
+
+STEP 8 の中で「fohlen 取得」が「自己ロックダウン」より**前**に実行される順序は必須である。逆順にすると、自己ロックダウンが先に適用された時点で Audit VM 自身の `pf.conf` が `tcp port 443` 以外の outbound を拒否するため、Git VM への到達(`tcp port 3000`)が成立しない。
 
 ---
 
@@ -97,12 +156,12 @@
 
 - `remote.log` を末尾追記検出（`stat` によるサイズ監視、既存 `owl-audit-detect.sh` のオフセット方式と同じ考え方）でストリーミング取り込みする。ローテーション（サイズ縮小検出）時はオフセットを0へリセットし、ローテーション直前にまだ取り込んでいない末尾を最初に処理してから新ファイルへ追従する（取りこぼし防止）。
 - 起動時（および新しい `.gz` 世代が `owl-audit-seal.sh` によって生成された検出時）に、未取り込みの封印済み世代を1回だけ取り込む。取り込み済み世代は世代ファイル名をキーに `/var/db/fohlen/state/ingested.json` 等へ記録し、再取り込みしない（冪等性、[cqrs.md §3.3](cqrs.md) のチェックポイント方式と同型の発想）。
-- syslog 行のパース（OpenBSD `syslogd` 標準形式: `<timestamp> <hostname> <tag>[<pid>]: <message>`）を行い、送信元ホスト名（`ap_vm`/`db_vm`/`git_vm`/`build_vm`/host 自身を `pf.conf` のホスト名解決と対応付け）・facility/priority・tag・本文に分解する。この段階では構文要素 (`RawRecord{Timestamp, SourceHost, Facility, Tag, Message}`) を作るだけで、「これが何の事象か」はまだ判断しない。
+- syslog 行のパース（OpenBSD `syslogd` 標準形式: `<timestamp> <hostname> <tag>[<pid>]: <message>`）を行い、送信元ホスト名（`ap_vm`/`db_vm`/`git_vm`/`build_vm`/host 自身を `pf.conf` のホスト名解決と対応付け）・tag・pid・本文に分解する。この段階では構文要素 (`RawRecord{Timestamp, SourceHost, Tag, PID, Message}`) を作るだけで、「これが何の事象か」はまだ判断しない。**facility/priority はこの構文要素に含めない**——[setup.sh](../infra/vm-audit/setup.sh) の `syslog.conf` は `*.* /var/log/audit/remote.log` という素の選択子で振り分けており、OpenBSD `syslogd` の既定の出力フォーマットは行内に facility/priority を記録しない（記録するには `%dd` 等の非既定フォーマット指定が必要）。一度も書かれていないフィールドをパース結果として捏造しないことを構文分解層の不変条件とする。
 - newsyslog による世代削除（30世代を超えた古い `.gz` の消滅）を検出した場合、対応する索引行を次回取り込みサイクルで削除する（索引はログの写しに過ぎず、原本が消えたら追従して縮小する。[cqrs.md §7](cqrs.md)「リビルド可能なキャッシュ」と同じ思想）。
 
 **② 正規化（`RawRecord` → `AuditEvent`、意味の割り当て）**
 
-`RawRecord` を、決定的なルールテーブル（tag・facility・message の正規表現マッチ、設定ファイルで追加・調整可能）によって有限のカテゴリ集合へ分類する。owlv の `Core.Event`（[CLAUDE.md](../CLAUDE.md) Recipe）が `decide`/`evolve` の入力になる前に生の取引文字列を型付きイベントへ変換するのと同じ立場であり、分類ルールが「何を異常とみなすか」(§4.3)の前提を固定する設計上の核である。
+`RawRecord` を、決定的なルールテーブル（tag・message の正規表現マッチ、設定ファイルで追加・調整可能。facility は§4.1①の理由により構文要素に存在しないため対象外）によって有限のカテゴリ集合へ分類する。owlv の `Core.Event`（[CLAUDE.md](../CLAUDE.md) Recipe）が `decide`/`evolve` の入力になる前に生の取引文字列を型付きイベントへ変換するのと同じ立場であり、分類ルールが「何を異常とみなすか」(§4.3)の前提を固定する設計上の核である。
 
 ```go
 type AuditEvent struct {
@@ -237,6 +296,8 @@ ssh -N -L 9090:10.0.3.10:9090 -i ~/.ssh/fohlen_viewer host.owl.internal
   audit-notify-webhook          既存。fohlen も読み取り、通知先を共有
 ```
 
+**権限分離の詳細**: `_fohlen`（nologin、`/etc/owlv` 配下の認証情報を除き doas ルールなし）は補助グループ `owl-audit-read` にのみ所属する。このグループは `/var/log/audit`（`root:owl-audit-read`、`750`）の読み取りのためだけに新設したもので、`wheel`（物理コンソール管理者が `doas` で root へ上がるための既存グループ、`doas.conf` の `permit persist :wheel`）とは独立である。`/var/db/fohlen` 配下は `_fohlen` 単独プロセスのみが読み書きするため、グループアクセス自体を与えず `700` のオーナー限定にする——複数プロセス/複数ユーザーでの共有を前提としたグループ権限は、ここでは単に攻撃面を広げるだけで益がない。
+
 OpenBSD `pledge`/`unveil` の適用方針は既存の owlv アプリ（[cqrs.md §4.3](cqrs.md)）と対称的に設計する: `fohlen` は起動時に `unveil("/var/log/audit", "r")` ・ `unveil("/var/db/fohlen", "rwc")` ・ `unveil("/etc/owlv", "r")` を行う。`pledge` には `rpath wpath cpath inet stdio` 程度の最小集合のみを与える（`exec` は不要、外部プロセスを起動しない）。
 
 **unveil 最終ロックのタイミング**: `unveil(nil, nil)`（以後のいかなる追加 unveil も拒否する最終ロック）は、上記3パスの unveil 宣言を終えた直後ではなく、**`modernc.org/sqlite` で `index.sqlite3` への接続(`sql.Open` → 実際に1クエリ発行して内部初期化を完了させた時点)を通過した直後**に行う。`modernc.org/sqlite` は内部実装上、一時ファイル(SQLiteのジャーナル/WAL関連)の作成先を `TMPDIR` 等の環境変数や `os.UserCacheDir()` 相当のパス解決に委ねている箇所があり、これらは `/var/db/fohlen` 配下に収まらない一時パスへ瞬間的に `open(2)` を試みる場合がある。3パス宣言の直後に最終ロックすると、この内部初期化が失敗して `unveil` 違反によるプロセス強制終了(SIGABRT、表面的には不可解なセグメンテーションフォールト的挙動として観測されうる)やパーミッションエラーに直結する。**起動シーケンスは「unveil 3パス宣言 → DB接続を開いて1クエリ通す → 必要なら `TMPDIR` を `/var/db/fohlen/tmp` に固定して当該パスも unveil → 最終ロック」の順を必須とする。**`TMPDIR` を明示的に `/var/db/fohlen/tmp` へ設定し、起動時に当該ディレクトリを作成・unveil 対象に含めておくことで、unveil 後に未知のパスへ依存する余地を構造的に塞ぐ。
@@ -253,7 +314,7 @@ OpenBSD `pledge`/`unveil` の適用方針は既存の owlv アプリ（[cqrs.md 
 
 ---
 
-## 9. デプロイ（CI/CD、§3「残課題」の解決）
+## 9. デプロイ（CI/CD）
 
 owlv 本体（AP VM）は [dev_sec_ops.md §4.2](dev_sec_ops.md) のプル型デプロイ（ホストが `deploy-poll` で定期検知 → AP VM へ SSH 経由でデプロイ指示 → AP VM が Git VM から自発的プル）を採用している。`fohlen` には同じ経路を**そのまま使えない**。理由は本書 §1 の制約条件そのものである。
 
@@ -300,9 +361,21 @@ owlv 本体（AP VM）は [dev_sec_ops.md §4.2](dev_sec_ops.md) のプル型デ
 
 ## 10. 残課題
 
+このリビジョンで確定・解決した事項（旧版では未決だった）:
+
+- **UI ポート番号**: `9090` を最終確定した。`vmd.conf` 上で他 VM が使う唯一のポートは AP VM の `8022`(SSH) / Git VM の `3000`(Forgejo) であり衝突しない。host pf.conf・vm-audit 自身の pf.conf 双方に `9090` のルールが実際に書き込まれていることを確認済み（§6.1, §9）。
+- **`_fohlen` の権限グループ**: `wheel`（`doas.conf` の管理者グループ）の流用を廃止し、読み取り専用の `owl-audit-read` を新設した（§3, §7）。
+- **デプロイ経路**: §9 で確定（Audit VM 専用の provisioning-time pull 方式）。
+- **Build VM の `go` ツールチェーン**: §9 で確定（`pkg_add go` を無条件化、`go:host` ラベル追加）。
+- **リソース予算の具体化**: 256MB/10G の内訳目安を §1.1 で明文化した（実測確定は本章に残す）。
+
+未解決の残課題:
+
 - **統計手法の閾値校正**: §4.3 のσ係数・CUSUM の `k`/`h`・EWMA の `λ` は実機のログ収集後に経験的に決める。初期値は保守的（誤検知を許容し見逃しを避ける）に設定し、運用しながら調整する。
 - **Basic認証の認証情報のローテーション運用**: [pentest_spec.md §11](pentest_spec.md) のポストテスト手順と同様、定期ローテーションの運用規律を別途定める。`fohlen genpasswd <user> <htpasswd-file>` で既存ユーザーのパスワードを再生成できる（旧パスワードは即時失効）。
 - **pentest_spec.md への新規テストケース追加**: §6.1 の新規 pf.conf ルールと §6.2 のホスト鍵制限が実機で意図通り機能するかを検証するテストIDを、`fohlen` 実装完了後に [pentest_spec.md](pentest_spec.md) へ追記する。
 - **イベント分類ルールテーブルの拡充**: §4.1 の初期セットは既存 `owl-audit-detect.sh` の `grep` パターンをそのまま移植したものに過ぎない。実機ログのレビューを経て `AuthSuccess`/`AuthFailure` 以外のカテゴリ追加、メッセージ文言の揺れ(OpenBSDバージョン差異、[setup.sh](../infra/vm-audit/setup.sh) の検証注記と同じ懸念)への対応が必要。
-- **`modernc.org/sqlite` のメモリチューニング値の実測確定**: §4.2 のバルクコミット件数(目安2000行)・`cache_size`(目安-2000)は実機ベンチマーク前の暫定値。256MB環境での実際のRSSピークを `vmstat`/`top` で観測し、GCスパイクが許容範囲(他サービスの動作に影響しない水準)に収まることを確認した上で確定する。
+- **`modernc.org/sqlite` のメモリ/ディスクチューニング値の実測確定**: §1.1 の予算表・§4.2 のバルクコミット件数(目安2000行)・`cache_size`(目安-2000)は実機ベンチマーク前の設計目標値。256MB環境での実際のRSSピークを `vmstat`/`top` で観測し、GCスパイクが §1.1 の目標(定常50–80MB/ピーク150MB以下)に収まることを確認した上で確定する。単一 vCPU(§1表)であることも踏まえ、GCピーク中は他処理が完全に止まる前提で計測すること。
 - **初回配置の手順**: §9 のデプロイ経路は Build VM の CI が一度も走っていない（または Git VM が DR 復元直後で `forgejo dump` を未だ復元していない）状態では「署名済みリリースなし」として安全にスキップする。実機での初回導入時は、(a) 実際に owlv リポジトリへ何らかの差分を push して `build-fohlen.yml` を一度走らせる、(b) `owl-control.sh sign-poll` の cron 周期(5分)を待つ、(c) `vm-audit/setup.sh` を再実行する、という3段の待ち合わせが発生する。DR 復元時系列（[dev_sec_ops.md §2.4](dev_sec_ops.md) 手順5「Git VM へ forgejo dump を復元する」は手順3「プロビジョニング」より後）との整合も含め、運用手順書側に明記する。
+- **バイナリ世代の自動整理**: §9 のシンボリックリンク切替方式は `fohlen_<tag>` を世代ごとに `/usr/local/bin/` へ残し続け、自動削除しない（AP VM の `owlv-app_<tag>` と同型）。10G ディスク予算(§1.1)を圧迫する前に古い世代を手動整理する運用、または世代数上限を設けた自動削除のいずれかを別途設計する。
+- **`owl-audit-read` グループのドキュメント反映範囲**: 本リビジョンで `vm-audit/setup.sh` を直接修正したが、`pentest_spec.md` 等の他ドキュメントが `wheel` 前提の記述を持っていないか別途確認する。
