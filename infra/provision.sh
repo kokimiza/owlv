@@ -86,6 +86,33 @@
 #
 # この時点では SSH を維持する。
 # Yubikey セットアップ完了まで管理者がロックアウトされないようにするため。
+#
+# ━━━ 【鍵の全体像 — provision.sh 実行に必要な鍵は上記の1個だけ】━━━━━━━━━━━
+#
+# 「鍵がもう1個要るのでは？」と迷いやすいので、本システムに登場する SSH 鍵を
+# 一覧にしておく。**provision.sh 自体を実行するために開発機で用意するのは
+# 上記 (4) の1個のみ**。PROV_KEY (/etc/owlv/prov_ed25519, 使い捨て) と
+# BACKUP_KEY (/etc/owlv/backup_ed25519, 恒久・owl-control.sh 用) はホストが
+# STEP 6 (host/steps/06-sshkeys.sh) で自動生成するため、開発機側で何かを
+# 用意する必要はない。
+#
+# 以下は provision.sh の範囲外で、必要になったときに初めて個別に用意する
+# **別系統の鍵**(同一鍵の使い回しはしない — 用途ごとに鍵を分離する最小権限の
+# 原則。doc/user.md §2.1 の「同一鍵を複数 UserId に登録しない」と同じ発想):
+#
+#   - **git-jump 用** (任意、開発メンバーを増やすとき): 各開発者が自分の鍵を
+#     作り、host/security/dev-join.sh <username> <pubkey-file> で登録する
+#     (infra/host/conf/git-jump-keys/<username>.pub としてコミットも忘れずに)。
+#     Forgejo Web UI / git push へのトンネル専用、シェル到達不可。
+#   - **fohlen UI 閲覧用** (任意、Audit VM の htmx UI を見るとき):
+#     doc/audit_engine.md §6.2 の手順で developer ごとに
+#     "restrict,permitopen=\"<audit_vm>:9090\"" 付きの専用鍵を生成し、
+#     ホストの authorized_keys に追加する。ポート転送専用、シェル到達不可。
+#     この鍵は (4) のホスト管理ログイン鍵とは意図的に別系統にする
+#     (ホスト管理アクセスと Audit VM 閲覧アクセスの権限を分離するため)。
+#   - **Yubikey PIV/FIDO2 鍵** (Yubikey 到着後): yubikey-setup.sh が (4) の
+#     パスフレーズ鍵を置き換える形で追加登録する。最終的にパスワード/パスフレーズ
+#     認証を全廃する移行先。
 
 set -eu
 trap '_on_exit $?' EXIT
