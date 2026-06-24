@@ -225,7 +225,7 @@ _ok "doas.conf 更新"
 # provision.sh が owl-config.toml [user] root_admin_username を環境変数で注入する。
 # owlv-app の起動環境にも setenv で渡るよう doas.conf に明記する (上記)。
 if [ -n "$ROOT_ADMIN_USERNAME" ]; then
-	install -d -m 750 /etc/owl
+	install -d -m 750 /etc/owlv
 	printf 'OWLV_ROOT_ADMIN_USERNAME=%s\n' "$ROOT_ADMIN_USERNAME" >/etc/owlv/owlv.env
 	# 640 (root:wheel) だと owl-session (操作者本人の uid で実行中) から
 	# 読めず、OWLV_ROOT_ADMIN_USERNAME が常に未設定になっていた
