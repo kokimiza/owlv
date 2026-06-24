@@ -53,6 +53,17 @@ grep -qF "@${AUDIT_IP}" /etc/syslog.conf 2>/dev/null || {
 # AP VM は §1.3 のロックステップ要件があるため、同一 provision.sh 実行内で
 # 両 VM に syspatch を適用することがロックステップの実体になる。再実行時は
 # 適用済みなら何もしない (syspatch は idempotent)。
+# 新規インストール直後は /etc/rc がバックグラウンドで reorder_kernel (KARL) を
+# 走らせており、完了前に syspatch を叩くと "cannot apply patches while
+# reorder_kernel is running" で拒否される (実際に発生)。完了まで待つ。
+_reorder_wait=0
+while pgrep -q reorder_kernel 2>/dev/null; do
+	sleep 5
+	_reorder_wait=$((_reorder_wait + 5))
+	[ "$_reorder_wait" -ge 900 ] && break
+done
+[ "$_reorder_wait" -gt 0 ] && _info "reorder_kernel 完了待ち: ${_reorder_wait}秒"
+
 _log "syspatch 適用"
 syspatch || _info "警告: syspatch に失敗しました (ミラー到達不可の可能性)。後で手動実行: syspatch"
 _ok "syspatch"
