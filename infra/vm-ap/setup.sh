@@ -21,6 +21,14 @@ OWL_DB_IP="${OWL_DB_IP:?OWL_DB_IP is required}"
 GIT_IP="${OWL_GIT_IP:?OWL_GIT_IP is required}"
 AUDIT_IP="${OWL_AUDIT_IP:?OWL_AUDIT_IP is required}"
 APP_SSH_PORT="${APP_SSH_PORT:-8022}"
+# owl-config.toml [app] の DB 名・ロール名 (db.env.template / db-projector.env.template
+# で使う)。vm-db/setup.sh が CREATE USER/createdb する実際のロール・DB名と
+# 一致させる必要があるため、ハードコードではなく同じ変数経由で受け取る
+# (実際に発生していた問題: 以前は両テンプレートに "owl_app"/"owl_projector"/
+# "owl" を直接書いていたため、owl-config.toml 側を変更しても反映されなかった)。
+DB_NAME="${DB_NAME:-owl}"
+DB_APP_USER="${DB_APP_USER:-owl_app}"
+DB_PROJECTOR_USER="${DB_PROJECTOR_USER:-owl_projector}"
 
 # doc/user.md §7: Admin を自動生成してよい唯一のOSユーザー名 (owl-config.toml [user])
 ROOT_ADMIN_USERNAME="${OWLV_ROOT_ADMIN_USERNAME:-}"
@@ -291,8 +299,8 @@ cat >/etc/owlv/db.env.template <<EOF
 # db-secrets-rotate.sh が実値で /etc/owlv/db.env (chmod 600, owner owlv-app) を生成する。
 PGHOST=${OWL_DB_IP}
 PGPORT=5432
-PGDATABASE=owl
-PGUSER=owl_app
+PGDATABASE=${DB_NAME}
+PGUSER=${DB_APP_USER}
 PGPASSWORD=<手動設定>
 PGSSLMODE=verify-full
 PGSSLROOTCERT=/etc/owlv/db-ca.crt
@@ -334,8 +342,8 @@ cat >/etc/owlv/db-projector.env.template <<EOF
 # db-secrets-rotate.sh が実値で /etc/owlv/db-projector.env (chmod 600) を生成する。
 PGHOST=${OWL_DB_IP}
 PGPORT=5432
-PGDATABASE=owl
-PGUSER=owl_projector
+PGDATABASE=${DB_NAME}
+PGUSER=${DB_PROJECTOR_USER}
 PGPASSWORD=<手動設定>
 PGSSLMODE=verify-full
 PGSSLROOTCERT=/etc/owlv/db-ca.crt
