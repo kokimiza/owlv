@@ -1,0 +1,26 @@
+# Sample /etc/owlv/fohlen.toml — see doc/audit_engine.md §7, §9.
+# Every key shown here is optional; an absent key keeps its built-in
+# default (internal/config/config.go's Default()).
+
+[server]
+listen_addr = ":9090"
+htpasswd_path = "/etc/owlv/audit-ui-htpasswd"
+
+[paths]
+log_dir = "/var/log/audit"
+db_dir = "/var/db/fohlen"
+webhook_file = "/etc/owlv/audit-notify-webhook"
+
+[ingest]
+bulk_commit_size = 2000
+sqlite_cache_size_kb = 2000
+poll_interval_seconds = 60
+
+# Initial values are conservative (doc/audit_engine.md §9: "誤検知を許容し
+# 見逃しを避ける"). Calibrate after collecting real traffic.
+[stats]
+shewhart_sigma = 3.0
+ewma_lambda = 0.2
+cusum_k = 0.5
+cusum_h = 5.0
+entropy_surprise_bits = 8.0

@@ -1,0 +1,35 @@
+{{define "integrity_page"}}
+<!DOCTYPE html>
+<html lang="ja">
+<head>{{template "head" .}}</head>
+<body>
+{{template "nav" .}}
+<h1>改ざん検知状況 (sealed-manifest.sha256)</h1>
+<div id="integrity-body" hx-get="/partials/integrity" hx-trigger="load, every 30s" hx-swap="innerHTML">
+  読み込み中...
+</div>
+</body>
+</html>
+{{end}}
+
+{{define "integrity_partial"}}
+<p>連鎖全体の整合性:
+  {{if .AllOK}}<span class="ok">OK</span>{{else}}<span class="fail">異常を検出</span>{{end}}
+</p>
+<table>
+  <tr><th>封印日時</th><th>ファイル</th><th>hash</th><th>prev リンク</th><th>再計算ハッシュ一致</th></tr>
+  {{range .Results}}
+  <tr>
+    <td>{{.Entry.Timestamp}}</td>
+    <td>{{basename .Entry.FilePath}}</td>
+    <td>{{.Entry.Hash}}</td>
+    <td>{{if .PrevLinkOK}}<span class="ok">OK</span>{{else}}<span class="fail">断絶</span>{{end}}</td>
+    <td>
+      {{if not .FileStillExists}}(原本はnewsyslog保持期間外){{else if .FileHashOK}}<span class="ok">一致</span>{{else}}<span class="fail">不一致</span>{{end}}
+    </td>
+  </tr>
+  {{else}}
+  <tr><td colspan="5">封印済み世代はまだありません。</td></tr>
+  {{end}}
+</table>
+{{end}}

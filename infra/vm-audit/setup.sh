@@ -190,6 +190,159 @@ crontab -l 2>/dev/null | grep -v 'owl-audit-' >/tmp/owl-audit-crontab.tmp || tru
 rm -f /tmp/owl-audit-crontab.tmp
 _ok "cron 登録 (検知: 1分間隔 / 封印: 10分間隔)"
 
+# ── fohlen (doc/audit_engine.md §10) の取得・検証・配置 ─────────────
+# 鉄則①により Audit VM は dev_lan(Git VM) へ恒久的な経路を持たず、自身への
+# SSH 受信も本スクリプト末尾の自己ロックダウンで永久に遮断する。そのため
+# owlv 本体(AP VM)が使う「ホストが deploy-poll で都度 push する」継続的
+# デプロイは構造的に成立しない。代わりに、host/steps/04-pf-nat.sh が
+# プロビジョニング中だけ audit_lan↔dev_lan を一時的に開けている今この時点
+# (まだ本番封鎖前)で Git VM のリリースレジストリから直接取得・三重検証
+# (署名/uname -r/SHA256、doc/dev_sec_ops.md §4.2と同型)・配置まで完了させる。
+# 再プロビジョニング(本スクリプト再実行)が更新手段になる — 他 VM の
+# setup.sh と同じ「再実行可能」の思想(webhook URL 配置と同様)。
+FOHLEN_CONFIG=/provision/owl-config.toml
+_fohlen_toml() {
+	awk -v sec="[$1]" -v k="$2" '
+        /^\[/ { in_sec=($0==sec) }
+        in_sec && $1==k {
+            sub(/^[^=]+=[ ]*/, "")
+            sub(/[ ]*#.*$/, "")
+            gsub(/^"|"$/, "")
+            print; exit
+        }
+    ' "$FOHLEN_CONFIG"
+}
+
+_fohlen_install() {
+	[ -f "$FOHLEN_CONFIG" ] || {
+		_info "owl-config.toml が見つからないため fohlen 取得をスキップします"
+		return 0
+	}
+
+	FOHLEN_OWNER="$(_fohlen_toml "forgejo" "owner")"
+	FOHLEN_REPO="$(_fohlen_toml "forgejo" "repo")"
+	if [ -z "$FOHLEN_OWNER" ] || [ -z "$FOHLEN_REPO" ]; then
+		_info "owl-config.toml に [forgejo] owner/repo が見つからないため fohlen 取得をスキップします"
+		return 0
+	fi
+	[ -n "${OWL_GIT_IP:-}" ] || {
+		_info "OWL_GIT_IP が未設定のため fohlen 取得をスキップします"
+		return 0
+	}
+
+	FOHLEN_API="http://${OWL_GIT_IP}:3000/api/v1/repos/${FOHLEN_OWNER}/${FOHLEN_REPO}"
+	_log "Git VM (${OWL_GIT_IP}) から fohlen の承認済みリリースを確認中..."
+	FOHLEN_REL_JSON="$(curl -fsS "${FOHLEN_API}/releases?draft=false&pre-release=false&limit=50" 2>/dev/null)" || {
+		_info "Git VM への到達に失敗しました。fohlen は未配置のままです(再プロビジョニングで再試行可能)"
+		return 0
+	}
+
+	# fohlen-* タグのみ対象。Forgejo API は作成日降順で返すため最初の1件が最新。
+	# owlv 本体のタグ (vX.Y.Z-<sha>) と名前空間を分けているのは
+	# infra/vm-git/build-fohlen.yml が "fohlen-" を前置するため。
+	FOHLEN_TAG="$(printf '%s' "$FOHLEN_REL_JSON" | tr ',' '\n' |
+		awk -F'"' '/"tag_name":"fohlen-/{print $4; exit}')"
+	if [ -z "$FOHLEN_TAG" ]; then
+		_info "署名済み(承認済み)fohlen リリースがまだありません。スキップします"
+		_info "(Build VM の CI がタグ付け → ホストの sign-poll が署名するまで配置されません)"
+		return 0
+	fi
+	_ok "最新の承認済みリリースを検出: ${FOHLEN_TAG}"
+
+	if [ -f /usr/local/bin/fohlen.version ] && [ "$(cat /usr/local/bin/fohlen.version)" = "$FOHLEN_TAG" ]; then
+		_info "fohlen は既に最新 (${FOHLEN_TAG}) のためスキップ"
+		return 0
+	fi
+
+	[ -f /provision/release-signify.pub ] || {
+		_info "release-signify.pub が未配置のため fohlen 取得をスキップします"
+		_info "(host/steps/08-vm-provision.sh / 01-host-foundation.sh を確認してください)"
+		return 0
+	}
+
+	FOHLEN_TMP="$(mktemp -d /tmp/owl-fohlen.XXXXXX)"
+	FOHLEN_BASE_URL="http://${OWL_GIT_IP}:3000/${FOHLEN_OWNER}/${FOHLEN_REPO}/releases/download/${FOHLEN_TAG}"
+	for f in fohlen-openbsd-amd64 manifest.txt manifest.txt.sig; do
+		ftp -o "${FOHLEN_TMP}/${f}" "${FOHLEN_BASE_URL}/${f}" || {
+			_info "警告: ${f} の取得に失敗しました。fohlen 更新を中止します"
+			rm -rf "$FOHLEN_TMP"
+			return 0
+		}
+	done
+
+	signify -V -p /provision/release-signify.pub -m "${FOHLEN_TMP}/manifest.txt" -x "${FOHLEN_TMP}/manifest.txt.sig" ||
+		_die "fohlen (${FOHLEN_TAG}) の manifest.txt 署名検証に失敗しました — 改ざんの可能性があるため中止します"
+
+	FOHLEN_UNAME_R_LOCAL="$(uname -r)"
+	FOHLEN_UNAME_R_EXPECTED="$(awk -F= '/^uname_r=/{print $2}' "${FOHLEN_TMP}/manifest.txt")"
+	[ "$FOHLEN_UNAME_R_LOCAL" = "$FOHLEN_UNAME_R_EXPECTED" ] ||
+		_die "OS リリース不一致: 本機 ${FOHLEN_UNAME_R_LOCAL} / ビルド時 ${FOHLEN_UNAME_R_EXPECTED} (Build VM と Audit VM は同一リリースで運用すること、doc/dev_sec_ops.md §1.3)"
+
+	FOHLEN_EXPECTED_SHA="$(awk -F= '/^fohlen-openbsd-amd64.sha256=/{print $2}' "${FOHLEN_TMP}/manifest.txt")"
+	[ -n "$FOHLEN_EXPECTED_SHA" ] || _die "manifest.txt に fohlen-openbsd-amd64 のハッシュがありません"
+	FOHLEN_ACTUAL_SHA="$(sha256 -q "${FOHLEN_TMP}/fohlen-openbsd-amd64")"
+	[ "$FOHLEN_EXPECTED_SHA" = "$FOHLEN_ACTUAL_SHA" ] || _die "SHA256 不一致: fohlen-openbsd-amd64 (改ざんの可能性)"
+
+	chmod 755 "${FOHLEN_TMP}/fohlen-openbsd-amd64"
+	install -m 755 "${FOHLEN_TMP}/fohlen-openbsd-amd64" "/usr/local/bin/fohlen_${FOHLEN_TAG}"
+	# シンボリックリンクの切替はリンク作成 → 同名へ mv (同一ファイルシステム内の
+	# rename はアトミック) という手順にし、旧リンクが一瞬でも存在しない状態を
+	# 作らない (owl-control.sh cmd_deploy と同型)。
+	ln -sf "fohlen_${FOHLEN_TAG}" /usr/local/bin/fohlen.new
+	mv /usr/local/bin/fohlen.new /usr/local/bin/fohlen
+	echo "$FOHLEN_TAG" >/usr/local/bin/fohlen.version
+	rm -rf "$FOHLEN_TMP"
+	_ok "fohlen ${FOHLEN_TAG} を三重検証(署名/uname -r/SHA256)のうえ配置"
+
+	# ── _fohlen 専用サービスアカウント (doc/audit_engine.md §3, §7) ──────
+	# nologin・doasルールなし。/var/log/audit (root:wheel, 750) の読み取りのみ
+	# wheel 経由で得る。書き込み権限は一切持たない。
+	id _fohlen >/dev/null 2>&1 || useradd -s /sbin/nologin -d /nonexistent _fohlen
+	usermod -G wheel _fohlen 2>/dev/null || true
+
+	install -d -m 750 -o _fohlen -g wheel /var/db/fohlen
+	install -d -m 700 -o _fohlen /var/db/fohlen/state
+	install -d -m 700 -o _fohlen /var/db/fohlen/tmp
+	_ok "/var/db/fohlen (_fohlen 所有) 作成"
+
+	# Basic 認証情報 (doc/audit_engine.md §6.3)。htpasswd(1) のような外部依存を
+	# 増やさず、fohlen 自身の genpasswd サブコマンド(bcrypt は既存依存を再利用)
+	# で生成する。既存ファイルがあれば上書きしない(誤ってパスワードを失効させない)。
+	if [ ! -f /etc/owlv/audit-ui-htpasswd ]; then
+		_log "fohlen UI 初期認証情報を生成 (このあと一度だけ表示されます)"
+		/usr/local/bin/fohlen genpasswd auditor /etc/owlv/audit-ui-htpasswd
+		chown _fohlen /etc/owlv/audit-ui-htpasswd
+		chmod 600 /etc/owlv/audit-ui-htpasswd
+	else
+		_info "audit-ui-htpasswd は既存のためスキップ (ローテーションは別途 doc/audit_engine.md §9)"
+	fi
+
+	# ── rc.d サービス ────────────────────────────────────────
+	cat >/etc/rc.d/fohlen <<'FOHLENRCEOF'
+#!/bin/ksh
+daemon="/usr/local/bin/fohlen"
+daemon_user="_fohlen"
+daemon_logger="daemon.info"
+# fohlen は自分自身をデーモン化(fork+detach)しない。rc_bg を立てないと rc.subr は
+# 子プロセスの detach を待ち続け、フォアグラウンドで動き続ける fohlen に対して
+# 毎回 daemon_timeout 一杯まで待って失敗する (forgejo/forgejo-runner と同じ理由)。
+rc_bg="YES"
+
+. /etc/rc.d/rc.subr
+rc_cmd $1
+FOHLENRCEOF
+	chmod 755 /etc/rc.d/fohlen
+	rcctl enable fohlen
+	if rcctl status fohlen >/dev/null 2>&1; then
+		rcctl restart fohlen || _info "警告: fohlen の再起動に失敗しました。/var/log/daemon を確認してください"
+	else
+		rcctl start fohlen || _info "警告: fohlen の起動に失敗しました。/var/log/daemon を確認してください"
+	fi
+	_ok "fohlen 起動 (rcctl)"
+}
+
+_fohlen_install
+
 # ── プロビジョニング完了処理 (ロックダウン前に自己完結させる) ──────────
 # 直後に適用する pf.conf は SSH(22) の受信を許可しないため、host/steps/08-vm-provision.sh
 # が他 VM と同様に行う「完了マーカーの書き込み」「プロビジョニング鍵の削除」を
@@ -215,6 +368,11 @@ set skip on lo0
 block all
 pass in proto udp to port 514
 pass out proto tcp to port 443
+# fohlen UI (doc/audit_engine.md §6.1, §10) — ホストのみが到達できる。
+# host/conf/pf.conf 側の "pass out on $audit_veth ... to $audit_vm port 9090"
+# と対になるゲスト側の受信許可。ホスト以外からの到達はホスト側 pf.conf の
+# 時点で既に block all に落ちるため二重防御として機能する。
+pass in proto tcp to port 9090
 PFEOF
 pfctl -f /etc/pf.conf
 rcctl enable pf
@@ -244,3 +402,11 @@ echo "   1. webhook URL が未確定の場合: owl-config.toml の [audit] を�
 echo "      再プロビジョニング(本スクリプトは再実行可能)で /etc/owlv/audit-notify-webhook を配置"
 echo "   2. host/conf/pf.conf の <audit_notify_dst> 用 CIDR ([audit].notify_dest_cidrs)"
 echo "      も webhook 確定時に設定し、host/steps/09-lockdown.sh の再実行で反映すること"
+echo "   3. fohlen (doc/audit_engine.md §10) がまだ配置されていない場合:"
+echo "      Build VM の CI (build-fohlen.yml) が初回のリリースをまだ作っていないか、"
+echo "      ホストの sign-poll がまだ署名していません。CI 完了後にこのスクリプトを"
+echo "      再実行 (再プロビジョニング) すると取得・検証・配置されます。"
+echo "   4. fohlen UI の初期パスワードはこの実行のログに一度だけ出力されています。"
+echo "      ログをスクロールして見つからない場合は auditor ユーザーを"
+echo "      'fohlen genpasswd auditor /etc/owlv/audit-ui-htpasswd' で再ローテーションしてください"
+echo "      (旧パスワードは即時失効します)。"

@@ -112,11 +112,19 @@ notify_webhook_url = ""
 # CIDR をここへ追加すること。空のままだと audit_lan の外向き443は何も通さない
 # (pf table が空 = 全遮断、これも安全側デフォルト)。
 notify_dest_cidrs = []
+
+[forgejo]
+# 【修正】以前はこの3キーが誤って [audit] セクション直下に置かれており、
+# owl-control.sh の `_toml "forgejo" "owner"` 等が常に空文字を返していた
+# (実害: sign-poll/deploy-poll が組み立てる Forgejo API URL が owner 欠落で
+# 不正になり、無音で機能しなくなっていた)。正しい [forgejo] セクションへ分離する。
 version = "15.0.3"
 runner_version = "12.11.1"
-# vm-git/setup.sh が `forgejo admin repo create --owner admin --name owlv` で
-# リポジトリを作成するため、所有者は Forgejo 上の admin ユーザーになる。
-owner = "admin"
+# vm-git/setup.sh は bot トークン (owlv-admin が発行) で POST /user/repos する
+# ため、リポジトリ所有者は forgejo 上の admin ユーザーではなく
+# FORGEJO_ADMIN_USER ("owlv-admin") になる。以前の値 "admin" は
+# vm-git/setup.sh の実装(API 経由のリポジトリ作成)と一致していなかった。
+owner = "owlv-admin"
 repo = "owlv"
 # owl-control.sh deploy-poll (§4.2) が Forgejo Releases API を読み書きするための
 # アクセストークン。本ファイルには値を書かない — Forgejo Web UI または

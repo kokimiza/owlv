@@ -1,0 +1,29 @@
+{{define "head"}}
+<meta charset="utf-8">
+<title>fohlen — Audit VM</title>
+<script src="/static/htmx.min.js"></script>
+<style>
+  body { font-family: monospace; margin: 2rem; background: #111; color: #ddd; }
+  nav a { margin-right: 1rem; color: #6cf; }
+  table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+  th, td { border: 1px solid #333; padding: 4px 8px; text-align: left; font-size: 0.9rem; }
+  th { background: #222; }
+  .cat-AuthSuccess { color: #8f8; }
+  .cat-AuthFailure { color: #f88; }
+  .cat-PrivilegeEscalationAttempt { color: #fa3; }
+  .cat-ConfigIntegrityDrift { color: #f6f; }
+  .cat-SessionForceTerminated { color: #ffa; }
+  .cat-Unclassified { color: #999; }
+  .ok { color: #8f8; }
+  .fail { color: #f44; font-weight: bold; }
+</style>
+{{end}}
+
+{{define "nav"}}
+<nav>
+  <a href="/">ダッシュボード</a>
+  <a href="/search">検索</a>
+  <a href="/integrity">改ざん検知状況</a>
+</nav>
+<hr>
+{{end}}

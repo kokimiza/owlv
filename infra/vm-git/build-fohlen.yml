@@ -1,0 +1,137 @@
+# CI/CD パイプライン — fohlen (Audit VM 向け Go 製フォレンジックエンジン、
+# doc/audit_engine.md)。doc/dev_sec_ops.md §3.2 / §4.1 / §4.2 の owlv 本体
+# (build.yml) と同じ Sec→Dev→タグ→未署名リリースの型を踏襲するが、
+# 配信先 Audit VM が鉄則①(他segmentへの双方向遮断)で deploy-poll の
+# 生 SSH push を受け付けないため、最終段の「デプロイ」だけは異なる
+# (host が承認済みリリースを保持するのみ。実際の取得・検証・配置は
+# vm-audit/setup.sh が再プロビジョニング時に行う。doc/audit_engine.md §10)。
+#
+# - PR (opened/synchronize/reopened): infra/vm-audit/fohlen/** に変更がある場合のみ
+#   Sec(go vet)→Dev(go build/test) を実行する。
+# - main への merge: 同じ Sec/Dev を再実行したうえで、fohlen 専用のタグ
+#   (fohlen-vX.Y.Z-<sha>) を打ち、未署名 manifest.txt とバイナリを
+#   draft=true のリリースとして添付する。owlv 本体のタグ (vX.Y.Z-<sha>) と
+#   名前空間が重ならないよう "fohlen-" を必ず前置する — host 側の
+#   owl-control.sh deploy-poll がこの前置詞でリリース種別を判別する。
+#
+# vm-build は Docker 非搭載・host モード専用(§3.1)。go ツールチェーンは
+# vm-build/setup.sh が forgejo-runner ビルドと共用で無条件インストール済み。
+
+name: build-fohlen
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths: ["infra/vm-audit/fohlen/**"]
+  push:
+    branches: [main]
+    paths: ["infra/vm-audit/fohlen/**"]
+
+jobs:
+  build-fohlen:
+    runs-on: [openbsd, go]
+    defaults:
+      run:
+        working-directory: infra/vm-audit/fohlen
+    steps:
+      - name: checkout
+        run: |
+          set -eu
+          git init -q .
+          git -c http.extraHeader="Authorization: token ${FORGEJO_TOKEN}" \
+            fetch --depth 50 "${FORGEJO_SERVER_URL}/${FORGEJO_REPOSITORY}.git" "${FORGEJO_SHA}"
+          git checkout -q FETCH_HEAD
+        working-directory: .
+
+      # ① Sec: 静的解析 (§4.1①相当。hsec/OSV 同期は owlv 本体同様に未着手)
+      - name: go vet
+        run: go vet ./...
+
+      - name: gofmt チェック (フォーマット崩れの検知)
+        run: |
+          set -eu
+          UNFORMATTED="$(gofmt -l .)"
+          if [ -n "$UNFORMATTED" ]; then
+            echo "次のファイルが gofmt 未適用です:" >&2
+            echo "$UNFORMATTED" >&2
+            exit 1
+          fi
+
+      # ② Dev: 再現可能なクリーンビルドとユニットテスト (§3.2, §4.1②相当)
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test ./...
+
+      # ここから先は main への承認済みマージ時のみ実行する (§4.2 と同じ運用)。
+      - name: リリースタグの算出
+        if: ${{ forgejo.event_name == 'push' && forgejo.ref == 'refs/heads/main' }}
+        id: ver
+        run: |
+          set -eu
+          FOHLEN_VER=$(cat VERSION)
+          SHA_SHORT=$(printf '%s' "${FORGEJO_SHA}" | cut -c1-7)
+          echo "tag=fohlen-v${FOHLEN_VER}-${SHA_SHORT}" >>"$FORGEJO_OUTPUT"
+
+      - name: 成果物の収集と未署名マニフェスト生成
+        if: ${{ steps.ver.outputs.tag != '' }}
+        run: |
+          set -eu
+          go build -o fohlen-openbsd-amd64 .
+
+          TAG="${{ steps.ver.outputs.tag }}"
+          {
+            echo "tag=${TAG}"
+            echo "commit=${FORGEJO_SHA}"
+            echo "uname_r=$(uname -r)"
+            # doc/dev_sec_ops.md §1.3, §4.2 と同じ理由: uname -r だけでは
+            # syspatch 適用状態の差を検出できないため稼働中カーネルのハッシュも
+            # 記録する。Audit VM は Build VM とのロックステップ対象ではないが
+            # (Build VM ←→ AP VM のみが対象、§1.3)、manifest.txt の形式と
+            # vm-audit/setup.sh の検証ロジックを owlv 本体と共通化するため
+            # 同じフィールドを記録する (実際には uname_r のみを照合に使う)。
+            echo "kernel_sha256=$(sha256 -q /bsd)"
+            echo "go_version=$(go version | awk '{print $3}')"
+            echo "fohlen-openbsd-amd64.sha256=$(sha256 -q fohlen-openbsd-amd64)"
+          } >manifest.txt
+
+          # signify 署名はここでは行わない (owlv 本体と同じ理由、§4.2)。
+          # Build VM に秘密鍵を置かず、ホスト側 owl-control.sh sign-poll が
+          # 後段で全リリース(owlv 本体・fohlen 共通)を一律に検知・署名する。
+
+      - name: "タグを作成して push"
+        if: ${{ steps.ver.outputs.tag != '' }}
+        run: |
+          set -eu
+          TAG="${{ steps.ver.outputs.tag }}"
+          git tag "$TAG" "${FORGEJO_SHA}"
+          git -c http.extraHeader="Authorization: token ${FORGEJO_TOKEN}" \
+            push "${FORGEJO_SERVER_URL}/${FORGEJO_REPOSITORY}.git" "refs/tags/${TAG}"
+
+      - name: Forgejo リリースを作成し成果物を添付
+        if: ${{ steps.ver.outputs.tag != '' }}
+        run: |
+          set -eu
+          TAG="${{ steps.ver.outputs.tag }}"
+          UNAME_R="$(uname -r)"
+          GO_VER="$(go version | awk '{print $3}')"
+          BODY="commit: ${FORGEJO_SHA}\\nuname -r: ${UNAME_R}\\ngo: ${GO_VER}\\ntarget: Audit VM (doc/audit_engine.md)"
+
+          # draft=true: owlv 本体と同じく、ホスト側 sign-poll が manifest.txt.sig
+          # を追加添付して draft=false にするまでは「承認済み・未デプロイ」にしない。
+          REL_ID=$(curl -fsS -X POST \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"body\":\"${BODY}\",\"draft\":true,\"prerelease\":false}" \
+            "${FORGEJO_API_URL}/repos/${FORGEJO_REPOSITORY}/releases" |
+            grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+          [ -n "$REL_ID" ] || { echo "リリース作成に失敗しました" >&2; exit 1; }
+
+          for f in fohlen-openbsd-amd64 manifest.txt; do
+            curl -fsS -X POST \
+              -H "Authorization: token ${FORGEJO_TOKEN}" \
+              -F "attachment=@${f}" \
+              "${FORGEJO_API_URL}/repos/${FORGEJO_REPOSITORY}/releases/${REL_ID}/assets?name=${f}" >/dev/null
+          done

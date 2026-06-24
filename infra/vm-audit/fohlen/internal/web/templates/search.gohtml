@@ -1,0 +1,46 @@
+{{define "search_page"}}
+<!DOCTYPE html>
+<html lang="ja">
+<head>{{template "head" .}}</head>
+<body>
+{{template "nav" .}}
+<h1>検索</h1>
+<form hx-get="/partials/search" hx-target="#search-results" hx-trigger="submit, change">
+  <label>キーワード (FTS5): <input type="text" name="q" value="{{.Filter.Keyword}}"></label>
+  <label>送信元ホスト:
+    <select name="source_host">
+      <option value="">(any)</option>
+      {{range .SourceHosts}}<option value="{{.}}" {{if eq . $.Filter.SourceHost}}selected{{end}}>{{.}}</option>{{end}}
+    </select>
+  </label>
+  <label>カテゴリ:
+    <select name="category">
+      <option value="">(any)</option>
+      {{range .Categories}}<option value="{{.}}" {{if eq . $.Filter.Category}}selected{{end}}>{{.}}</option>{{end}}
+    </select>
+  </label>
+  <button type="submit">検索</button>
+</form>
+<div id="search-results" hx-get="/partials/search" hx-trigger="load" hx-include="closest form">
+  検索条件を指定してください。
+</div>
+</body>
+</html>
+{{end}}
+
+{{define "search_results_partial"}}
+<table>
+  <tr><th>時刻</th><th>ホスト</th><th>カテゴリ</th><th>Actor</th><th>本文</th></tr>
+  {{range .Results}}
+  <tr>
+    <td>{{.Timestamp.Format "2006-01-02 15:04:05"}}</td>
+    <td>{{.SourceHost}}</td>
+    <td class="cat-{{.Category}}">{{.Category}}</td>
+    <td>{{.Actor}}</td>
+    <td>{{.Message}}</td>
+  </tr>
+  {{else}}
+  <tr><td colspan="5">該当する結果がありません。</td></tr>
+  {{end}}
+</table>
+{{end}}

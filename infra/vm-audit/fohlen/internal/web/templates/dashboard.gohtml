@@ -1,0 +1,48 @@
+{{define "dashboard_page"}}
+<!DOCTYPE html>
+<html lang="ja">
+<head>{{template "head" .}}</head>
+<body>
+{{template "nav" .}}
+<h1>ダッシュボード</h1>
+<div id="dashboard-body" hx-get="/partials/dashboard" hx-trigger="load, every 10s" hx-swap="innerHTML">
+  読み込み中...
+</div>
+</body>
+</html>
+{{end}}
+
+{{define "dashboard_partial"}}
+<p>Shannon エントロピー（(送信元,カテゴリ) 出現分布）: <b>{{printf "%.3f" .Entropy}} bits</b></p>
+<p>Unclassified レート: 平均 {{printf "%.2f" .UnclassifiedMean}} / EWMA {{printf "%.2f" .UnclassifiedEWMA}}</p>
+<table>
+  <tr><th>キー (source_host/category)</th><th>平均</th><th>標準偏差</th><th>EWMA</th><th>CUSUM S+</th><th>CUSUM S-</th></tr>
+  {{range .Rates}}
+  <tr>
+    <td>{{.Key}}</td>
+    <td>{{printf "%.2f" .Mean}}</td>
+    <td>{{printf "%.2f" .StdDev}}</td>
+    <td>{{printf "%.2f" .EWMA}}</td>
+    <td>{{if .HasCUSUM}}{{printf "%.2f" .CUSUMHigh}}{{else}}—{{end}}</td>
+    <td>{{if .HasCUSUM}}{{printf "%.2f" .CUSUMLow}}{{else}}—{{end}}</td>
+  </tr>
+  {{else}}
+  <tr><td colspan="6">統計が蓄積されるまでお待ちください。</td></tr>
+  {{end}}
+</table>
+<h2>直近の逸脱検知</h2>
+<table>
+  <tr><th>時刻</th><th>キー</th><th>手法</th><th>値</th><th>内容</th></tr>
+  {{range .RecentDetections}}
+  <tr>
+    <td>{{.Timestamp.Format "2006-01-02 15:04:05"}}</td>
+    <td>{{.Key}}</td>
+    <td>{{.Method}}</td>
+    <td>{{printf "%.2f" .Value}}</td>
+    <td>{{.Message}}</td>
+  </tr>
+  {{else}}
+  <tr><td colspan="5">検知なし。</td></tr>
+  {{end}}
+</table>
+{{end}}

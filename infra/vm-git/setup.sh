@@ -246,11 +246,13 @@ _ok "管理者ユーザー"
 # ラベルは "<名前>:<実行方式>" の形式が必須 (Docker を使わない host モードのみで
 # 動かすため、すべて :host を付与する。なお --labels を付けずに再登録すると
 # ラベルがリセットされる仕様のため、再実行時も毎回明示で渡す)。
+# go:host は fohlen (doc/audit_engine.md, build-fohlen.yml) 用。同じ vm-build 上の
+# 同一 Runner が capacity:2 で owlv 本体(haskell)と fohlen(go) の両ジョブを処理する。
 _log "Forgejo Runner をオフライン登録 (vm-build)"
 su -m git -c "forgejo forgejo-cli actions register \
 	--name vm-build \
 	--secret '${FORGEJO_RUNNER_SECRET}' \
-	--labels 'openbsd:host,haskell:host' \
+	--labels 'openbsd:host,haskell:host,go:host' \
 	--scope '' \
 	--config ${FORGEJO_DATA}/custom/conf/app.ini" ||
 	_die "Runner のオフライン登録に失敗しました"
@@ -280,8 +282,16 @@ curl -fsS -X POST \
 	_info "owlv リポジトリは既存のためスキップ"
 _ok "owlv リポジトリ"
 
-if [ -f "${SCRIPT_DIR}/build.yml" ]; then
-	_log ".forgejo/workflows/build.yml をリポジトリへ反映"
+# build.yml (owlv 本体/Haskell) と build-fohlen.yml (fohlen/Go, doc/audit_engine.md)
+# を同じコミットで反映する。後者が無い構成 (fohlen 未導入時点のチェックアウト)
+# でも前者だけで動作するよう、存在するファイルのみ対象にする。
+_WORKFLOW_FILES=""
+for _wf in build.yml build-fohlen.yml; do
+	[ -f "${SCRIPT_DIR}/${_wf}" ] && _WORKFLOW_FILES="${_WORKFLOW_FILES} ${_wf}"
+done
+
+if [ -n "$_WORKFLOW_FILES" ]; then
+	_log ".forgejo/workflows/ (${_WORKFLOW_FILES# }) をリポジトリへ反映"
 	WORK=$(mktemp -d)
 	git -c http.extraHeader="Authorization: token ${BOT_TOKEN}" \
 		clone -q "${API%/api/v1}/${FORGEJO_ADMIN_USER}/owlv.git" "$WORK" || _die "owlv リポジトリの clone に失敗しました"
@@ -289,18 +299,20 @@ if [ -f "${SCRIPT_DIR}/build.yml" ]; then
 		cd "$WORK" || exit 1
 		git checkout -q -B main
 		mkdir -p .forgejo/workflows
-		cp "${SCRIPT_DIR}/build.yml" .forgejo/workflows/build.yml
-		git add .forgejo/workflows/build.yml
+		for _wf in $_WORKFLOW_FILES; do
+			cp "${SCRIPT_DIR}/${_wf}" ".forgejo/workflows/${_wf}"
+			git add ".forgejo/workflows/${_wf}"
+		done
 		if git -c user.email="${FORGEJO_ADMIN_USER}@localhost" -c user.name="${FORGEJO_ADMIN_USER}" diff --cached --quiet; then
 			echo "  変更なし"
 		else
 			git -c user.email="${FORGEJO_ADMIN_USER}@localhost" -c user.name="${FORGEJO_ADMIN_USER}" \
-				commit -q -m 'ci: add/update build.yml'
+				commit -q -m 'ci: add/update workflows'
 			git -c http.extraHeader="Authorization: token ${BOT_TOKEN}" push -q origin HEAD:main
 		fi
-	) || _die "build.yml の反映に失敗しました"
+	) || _die "workflow の反映に失敗しました"
 	rm -rf "$WORK"
-	_ok "build.yml 反映"
+	_ok "workflow 反映 (${_WORKFLOW_FILES# })"
 else
 	_info "警告: ${SCRIPT_DIR}/build.yml が見つかりません。手動で追加してください"
 fi

@@ -428,6 +428,21 @@ cmd_deploy_poll() {
 		[ -n "$tag" ] || continue
 		grep -qxF "$tag" "$DEPLOYED_LOG" 2>/dev/null && continue
 
+		# fohlen (doc/audit_engine.md §10) は AP VM 向け owl-control.sh の生 SSH
+		# push 経路を使わない — Audit VM は鉄則①により dev_lan への恒久経路を
+		# 持たず、自身への SSH 受信も自己ロックダウンで永久に遮断しているため、
+		# このポーリングからは到達不能。実際の取得・検証・配置は
+		# infra/vm-audit/setup.sh がプロビジョニング(再実行可能)中に行う。
+		# ここでは cmd_deploy を呼ばずに既デプロイ台帳へ記録するだけにし、
+		# 5分ごとに同じ警告を吐き続けることを防ぐ。
+		case "$tag" in
+		fohlen-*)
+			_info "fohlen リリース ${tag} は再プロビジョニング(vm-audit/setup.sh)経由でのみ配置されます。deploy-poll はスキップします"
+			echo "$tag" >>"$DEPLOYED_LOG"
+			continue
+			;;
+		esac
+
 		_info "未デプロイの承認済みリリースを検知: ${tag}"
 		cmd_deploy "$tag"
 		echo "$tag" >>"$DEPLOYED_LOG"

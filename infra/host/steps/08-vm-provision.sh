@@ -22,6 +22,20 @@ _vm_provision() {
 		"root@${vmip}:/provision/"
 	_log "[${vmname}] 転送完了"
 
+	# リリース署名検証用の公開鍵 (signify, doc/dev_sec_ops.md §4.2) を全 VM へ
+	# 配布する。公開鍵であり秘匿性は不要なため、現時点で実際に検証を行う
+	# vm-audit (doc/audit_engine.md §10) 以外に置いても害はなく、将来 vm-ap側の
+	# 「手動配置」(§4.2) をこの自動経路へ統一する余地も残す。秘密鍵は
+	# /etc/owlv/release-signify.sec のままホストのみが保持し、ここでは公開鍵
+	# (.pub) のみを転送する。
+	if [ -f /etc/owlv/release-signify.pub ]; then
+		scp -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -q \
+			/etc/owlv/release-signify.pub "root@${vmip}:/provision/release-signify.pub"
+		_info "release-signify.pub を配布"
+	else
+		_info "警告: /etc/owlv/release-signify.pub が未生成 (01-host-foundation.sh 未実行?)。署名検証が必要な VM では後で再配置が必要です"
+	fi
+
 	# DR バックアップ鍵を authorized_keys に追加 (owl-control.sh 用)
 	_log "[${vmname}] DR バックアップ鍵を authorized_keys に追加..."
 	ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \

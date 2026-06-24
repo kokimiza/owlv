@@ -46,12 +46,18 @@ grep -qF "@${AUDIT_IP}" /etc/syslog.conf 2>/dev/null || {
 	_ok "syslog.conf に Audit VM (${AUDIT_IP}) への auth.* 転送を追加"
 }
 
-# ── パッケージ (GHC / cabal / 依存) ─────────────────────
-_log "GHC (>= ${GHC_MIN_VERSION}) および開発ツールをインストール"
+# ── パッケージ (GHC / cabal / Go / 依存) ─────────────────────
+# go はこの VM で2つの役割を持つ: ①forgejo-runner 自体のビルド (既存、下記参照)
+# ②CI ジョブが実行する fohlen (Audit VM 向け Go 製フォレンジックエンジン、
+# doc/audit_engine.md) のビルド。後者は forgejo-runner のビルドが既に完了して
+# いる再実行時にもスキップせず必要になるため、forgejo-runner ビルドの
+# 条件分岐 (`if [ ! -f "$RUNNER_BIN" ]`) の外側で無条件にインストールする。
+_log "GHC (>= ${GHC_MIN_VERSION}) / Go / 開発ツールをインストール"
 _info "GHC は数百MB規模のため、VM間NAT経由だと20〜40分以上かかることがあります。"
-# GHC は ports から (バイナリパッケージとして提供)
-pkg_add ghc cabal-install git curl ||
-	_die "GHC のインストールに失敗しました。上記 pkg_add の出力を確認してください"
+# GHC・go は ports から (バイナリパッケージとして提供)
+pkg_add ghc cabal-install go git curl ||
+	_die "GHC/Go のインストールに失敗しました。上記 pkg_add の出力を確認してください"
+_ok "go: $(go version 2>/dev/null || echo '取得失敗')"
 
 _installed_ghc=$(pkg_info | awk '/^ghc-[0-9]/{print $1; exit}' | sed -E 's/^ghc-([0-9]+\.[0-9]+).*/\1/')
 [ -n "$_installed_ghc" ] || _die "インストールされた GHC のバージョンを判定できませんでした (pkg_info の出力を確認してください)"
@@ -119,7 +125,7 @@ RUNNER_BIN="/usr/local/bin/forgejo-runner"
 RUNNER_SRC="/tmp/forgejo-runner-build"
 
 if [ ! -f "$RUNNER_BIN" ]; then
-	pkg_add go 2>/dev/null || _die "go のインストールに失敗しました"
+	# go は本スクリプト冒頭で既に無条件インストール済み (fohlen CI ビルドとの共用)。
 
 	ftp -o "${RUNNER_SRC}.tar.gz" \
 		"https://code.forgejo.org/forgejo/runner/archive/v${FORGEJO_RUNNER_VERSION}.tar.gz" ||
@@ -191,6 +197,12 @@ runner:
     # 時の setup.sh だけでなくここにも設定しておく必要がある。
     LANG: en_US.UTF-8
     LC_ALL: en_US.UTF-8
+    # fohlen (build-fohlen.yml) の go build/test 用。/root/go と同じ理由で
+    # "/" を圧迫しないよう _runner の作業領域 (/var/forgejo-runner) 配下に固定する
+    # (vm-build/setup.sh 冒頭の forgejo-runner 自身のビルドと同じ対策、ただし
+    # こちらは CI ジョブ間でキャッシュを再利用するため毎回は破棄しない)。
+    GOPATH: /var/forgejo-runner/.cache/go
+    GOCACHE: /var/forgejo-runner/.cache/go-build
   timeout: 3h
   insecure: false
   fetch_timeout: 5s
@@ -257,8 +269,10 @@ _ok "Forgejo Runner 起動"
 _log "Build VM セットアップ完了"
 echo ""
 echo " 【残りの手動作業】"
-echo "   1. owlv リポジトリに .forgejo/workflows/build.yml を追加"
+echo "   1. owlv リポジトリに .forgejo/workflows/build.yml と build-fohlen.yml を追加"
+echo "      (vm-git/setup.sh が両方を自動反映する)"
 echo "   2. git push で CI トリガーを確認:"
-echo "      Forgejo → owlv → Actions タブ"
+echo "      Forgejo → owlv → Actions タブ (build / build-fohlen の両ジョブ)"
 echo "   3. リリースの署名はこの VM では行わない。ホスト側の signify 鍵生成"
 echo "      (01-host-foundation.sh) と owl-control.sh sign-poll の cron 登録を確認すること"
+echo "      (owlv 本体・fohlen のどちらの draft リリースも同じ sign-poll が署名する)"
