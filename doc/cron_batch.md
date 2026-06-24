@@ -26,7 +26,7 @@ useradd -u 800 -g _owlbatch -c "owlv batch runner" \
 chmod 700 /var/lib/owlbatch
 
 # ログ・ロック領域(ディレクトリは root 管理、書き込みは _owlbatch)
-install -d -o _owlbatch -g _owlbatch -m 750 /var/log/owl /var/run/owl
+install -d -o _owlbatch -g _owlbatch -m 750 /var/log/owlv /var/run/owlv
 ```
 
 ### 権限境界(doas.conf)
