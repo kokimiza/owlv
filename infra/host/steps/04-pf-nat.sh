@@ -12,15 +12,16 @@ sysctl net.inet.ip.forwarding=1
 # pf が無効なホストでは NAT もブロックも一切働かず、VM の送信パケットが
 # プライベートアドレスのまま素通りしてしまう (実際に発生: ルールは正しく
 # ロードされ全カウンタが Evaluations:0 のまま、VM → 1.1.1.1 が不通)。
-# 既に有効な場合 pfctl -e は非ゼロ終了するため失敗を無視する。
-_log "pf を有効化 (既に有効なら何もしない)..."
-pfctl -e 2>/dev/null || true
-if ! pfctl -s info | grep -q '^Status: Enabled'; then
-	_die "pf の有効化に失敗しました (pfctl -s info で Status: Enabled になりません)"
-fi
-_ok "pf 有効化確認"
-
-_log "暫定 PF ルールを適用 (NAT: VM → WAN)..."
+#
+# 順序が重要: 先にルールをロードし (pf 無効中でも load 自体は可能)、
+# その後に enable する。逆順 (enable → load) だと、有効化した瞬間は
+# まだ意図したルールセットが入っておらず、provision.sh をまさに実行中の
+# 既存 SSH 接続 (pf 無効時に確立済みで state を一切持たない) がこの隙間で
+# 拾われずに止まり、block-policy drop により無応答のまま固まって見える
+# (実際に発生: STEP 4 実行中に手元の SSH セッションが無言でハングした)。
+# load を先に済ませておけば、有効化はルールセットの「切替」を伴わない
+# 単純な ON 操作になり、この隙間自体が無くなる。
+_log "暫定 PF ルールを読み込み (NAT: VM → WAN)..."
 # 注意: `cat | pfctl -f - <<PFEOF` は NG。
 #   ヒアドキュメントは右辺 (pfctl) に渡るが left の cat は端末 stdin を待ちフリーズする。
 #   正しくは pfctl に直接ヒアドキュメントを渡す。
@@ -81,6 +82,18 @@ pass in quick on vether2 proto { udp tcp } from 10.0.3.0/24 to ${HOST_AUDIT_IP} 
 # VM → インターネット: インストールセット取得 / pkg_add / ソースビルド用
 pass out on egress all keep state
 PFEOF
+_ok "暫定 PF ルール読み込み完了"
+
+# 既に意図したルールセットが読み込まれた状態で enable するため、有効化自体は
+# 「切替」を伴わない単純な ON 操作になる。既に有効な場合 pfctl -e は非ゼロ終了
+# するため失敗を無視する。
+_log "pf を有効化 (既に有効なら何もしない)..."
+pfctl -e 2>/dev/null || true
+if ! pfctl -s info | grep -q '^Status: Enabled'; then
+	_die "pf の有効化に失敗しました (pfctl -s info で Status: Enabled になりません)"
+fi
+_ok "pf 有効化確認"
+
 _log "pfctl -s rules:"
 pfctl -s rules 2>/dev/null | while read -r l; do _log "  $l"; done
 _ok "暫定 PF (NAT) 適用"
