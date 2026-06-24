@@ -234,7 +234,7 @@ _vm_state_for() {
 # ── ログファイル ───────────────────────────────────────────
 # OpenBSD /bin/sh (pdksh 派生) はプロセス置換 >(cmd) 未サポート。
 # named pipe + バックグラウンド tee で端末とファイルに同時出力する。
-mkdir -p /var/log/owl
+mkdir -p /var/log/owlv
 LOGFILE="/var/log/owlv/provision-$(date +%Y%m%d-%H%M%S).log"
 _LOGPIPE="/tmp/owl-prov-$$.pipe"
 mkfifo -m 600 "$_LOGPIPE"
