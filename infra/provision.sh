@@ -113,6 +113,9 @@
 #   - **Yubikey PIV/FIDO2 鍵** (Yubikey 到着後): yubikey-setup.sh が (4) の
 #     パスフレーズ鍵を置き換える形で追加登録する。最終的にパスワード/パスフレーズ
 #     認証を全廃する移行先。
+#
+# まとめると、provision.sh を初めて流すだけなら追加の鍵は不要。上記3種は
+# 「プロビジョニング後の運用を広げるとき」に初めて要る。
 
 set -eu
 trap '_on_exit $?' EXIT
@@ -275,6 +278,19 @@ OWL_BUILD_IP=$(_toml "network.dev_lan" "build_vm")
 OWL_AUDIT_IP=$(_toml "network.audit_lan" "audit_vm")
 GHC_VERSION=$(_toml "toolchain" "ghc_version")
 PG_VERSION=$(_toml "app" "pg_version")
+# 【修正】以前は [app] のうち pg_version だけが読み込まれ、同じセクションの
+# ssh_port/db_name/db_*_user は一切 _toml で読まれずに 08-vm-provision.sh の
+# 環境変数注入リストにも入っていなかった。vm-ap/setup.sh・vm-db/setup.sh は
+# 各自のシェル側デフォルト値 (たまたま owl-config.toml の既定値と一致) に
+# フォールバックしていたため実害は出ていなかったが、運用者が owl-config.toml
+# を編集しても何も反映されない「死んだ設定」になっていた (実際に発生)。
+APP_SSH_PORT=$(_toml "app" "ssh_port")
+DB_NAME=$(_toml "app" "db_name")
+DB_APP_USER=$(_toml "app" "db_app_user")
+DB_REPL_USER=$(_toml "app" "db_repl_user")
+DB_MIGRATOR_USER=$(_toml "app" "db_migrator_user")
+DB_PLATFORM_ADMIN_USER=$(_toml "app" "db_platform_admin_user")
+DB_PROJECTOR_USER=$(_toml "app" "db_projector_user")
 FORGEJO_VER=$(_toml "forgejo" "version")
 FORGEJO_RUNNER_VER=$(_toml "forgejo" "runner_version")
 OWLV_ROOT_ADMIN_USERNAME=$(_toml "user" "root_admin_username")
@@ -285,6 +301,7 @@ _log "  internal_lan: AP=${OWL_AP_IP} DB=${OWL_DB_IP}"
 _log "  dev_lan:      Git=${OWL_GIT_IP} Build=${OWL_BUILD_IP}"
 _log "  audit_lan:    Audit=${OWL_AUDIT_IP}"
 _log "  GHC=${GHC_VERSION}  PG=${PG_VERSION}  Forgejo=${FORGEJO_VER}  Runner=${FORGEJO_RUNNER_VER}"
+_log "  app: ssh_port=${APP_SSH_PORT} db_name=${DB_NAME} db_app_user=${DB_APP_USER}"
 
 LOGDIR=/var/log/owlv
 HOST_INT_IP="10.0.1.1"
@@ -300,7 +317,9 @@ _log "Forgejo Runner シークレット生成完了 (40 文字 hex)"
 
 export OWL_AP_IP OWL_DB_IP OWL_GIT_IP OWL_BUILD_IP OWL_AUDIT_IP \
 	OWL_RELEASE GHC_VERSION PG_VERSION FORGEJO_VER FORGEJO_RUNNER_VER \
-	FORGEJO_RUNNER_SECRET OWLV_ROOT_ADMIN_USERNAME OWL_AUDIT_NOTIFY_WEBHOOK
+	FORGEJO_RUNNER_SECRET OWLV_ROOT_ADMIN_USERNAME OWL_AUDIT_NOTIFY_WEBHOOK \
+	APP_SSH_PORT DB_NAME DB_APP_USER DB_REPL_USER DB_MIGRATOR_USER \
+	DB_PLATFORM_ADMIN_USER DB_PROJECTOR_USER
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
