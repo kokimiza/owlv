@@ -23,6 +23,15 @@ NOTIFY_WEBHOOK_URL="${OWL_AUDIT_NOTIFY_WEBHOOK:-}"
 
 _log "Audit VM セットアップ開始 (${OWL_AUDIT_IP})"
 
+# ── OS パッチ適用 (syspatch) ────────────────────────────────
+# doc/dev_sec_ops.md §5: 「syspatch の即日適用」が標準統制。STEP 4 の NAT が
+# 開いている STEP 8 (このスクリプト実行時) だけが外向き通信を持つ唯一の機会で、
+# この後本スクリプト自身が自己ロックダウンする pf.conf を書き込むと VM から外への
+# 通信が一切できなくなる。再実行時は適用済みなら何もしない (syspatch は idempotent)。
+_log "syspatch 適用"
+syspatch || _info "警告: syspatch に失敗しました (ミラー到達不可の可能性)。後で手動実行: syspatch"
+_ok "syspatch"
+
 # ── パッケージ ────────────────────────────────────────────
 # curl: 検知スクリプトが webhook へ JSON を POST するために使用 (ftp(1) では
 # 任意ヘッダ付き POST が困難)。webhook 未確定の現時点でも、確定時に再設定不要

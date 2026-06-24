@@ -46,6 +46,15 @@ grep -qF "@${AUDIT_IP}" /etc/syslog.conf 2>/dev/null || {
 	_ok "syslog.conf に Audit VM (${AUDIT_IP}) への auth.* 転送を追加"
 }
 
+# ── OS パッチ適用 (syspatch) ────────────────────────────────
+# doc/dev_sec_ops.md §5: 「syspatch の即日適用」が標準統制。STEP 4 の NAT が
+# 開いている STEP 8 (このスクリプト実行時) だけが外向き通信を持つ唯一の機会で、
+# STEP 9 のロックダウン後は VM から外への通信が一切できなくなる。再実行時は
+# 適用済みなら何もしない (syspatch は idempotent)。
+_log "syspatch 適用"
+syspatch || _info "警告: syspatch に失敗しました (ミラー到達不可の可能性)。後で手動実行: syspatch"
+_ok "syspatch"
+
 # ── パッケージ ────────────────────────────────────────────
 # OpenBSD のパッケージは点リリースまで含めたフル版番 (例: 18.3) でしか
 # 名前解決できず、メジャー番号だけの "postgresql-server-18" は一致しない。

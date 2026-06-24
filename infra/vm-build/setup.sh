@@ -46,6 +46,18 @@ grep -qF "@${AUDIT_IP}" /etc/syslog.conf 2>/dev/null || {
 	_ok "syslog.conf に Audit VM (${AUDIT_IP}) への auth.* 転送を追加"
 }
 
+# ── OS パッチ適用 (syspatch) ────────────────────────────────
+# doc/dev_sec_ops.md §5: 「syspatch の即日適用」が標準統制。STEP 4 の NAT が
+# 開いている STEP 8 (このスクリプト実行時) だけが外向き通信を持つ唯一の機会で、
+# STEP 9 のロックダウン後は VM から外への通信が一切できなくなる。Build VM と
+# AP VM は §1.3 のロックステップ要件 (uname -r 一致だけでは ABI 差を排除できない)
+# があるため、同一 provision.sh 実行内 (= 同一ミラー snapshot に近い時間帯) で
+# 両 VM に syspatch を適用することがロックステップの実体になる。再実行時は
+# 適用済みなら何もしない (syspatch は idempotent)。
+_log "syspatch 適用"
+syspatch || _info "警告: syspatch に失敗しました (ミラー到達不可の可能性)。後で手動実行: syspatch"
+_ok "syspatch"
+
 # ── パッケージ (GHC / cabal / Go / 依存) ─────────────────────
 # go はこの VM で2つの役割を持つ: ①forgejo-runner 自体のビルド (既存、下記参照)
 # ②CI ジョブが実行する fohlen (Audit VM 向け Go 製フォレンジックエンジン、
