@@ -154,13 +154,20 @@ _vm_provision() {
 		return
 	fi
 
+	# vm-ap は setup.sh 内で sshd を APP_SSH_PORT (既定 8022) に切り替えるため、
+	# setup.sh 実行後の事後 SSH 呼び出しはポート 22 では繋がらない (実際に発生:
+	# "Connection refused" でプロビジョニング全体が失敗していた)。他 VM は
+	# sshd のポートを変更しないため 22 のまま。
+	local sshport=22
+	[ "$vmname" = "vm-ap" ] && sshport="${APP_SSH_PORT:-8022}"
+
 	# /provision/ はこの関数の先頭で作成済みなので全 VM で存在が保証されている。
-	ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
+	ssh -p "$sshport" -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" \
 		"date > /provision/.owl-provisioned"
 
 	# プロビジョニング用の使い捨て鍵を VM から削除
 	_log "[${vmname}] プロビジョニング鍵を VM から削除..."
-	ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" "
+	ssh -p "$sshport" -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${vmip}" "
         grep -v 'owl-prov-' /root/.ssh/authorized_keys > /root/.ssh/ak.tmp || true
         mv /root/.ssh/ak.tmp /root/.ssh/authorized_keys
         chmod 600 /root/.ssh/authorized_keys

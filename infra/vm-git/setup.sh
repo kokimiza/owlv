@@ -53,19 +53,31 @@ grep -qF "@${AUDIT_IP}" /etc/syslog.conf 2>/dev/null || {
 # 開いている STEP 8 (このスクリプト実行時) だけが外向き通信を持つ唯一の機会で、
 # STEP 9 のロックダウン後は VM から外への通信が一切できなくなる。再実行時は
 # 適用済みなら何もしない (syspatch は idempotent)。
-# 新規インストール直後は /etc/rc がバックグラウンドで reorder_kernel (KARL) を
-# 走らせており、完了前に syspatch を叩くと "cannot apply patches while
-# reorder_kernel is running" で拒否される (実際に発生)。完了まで待つ。
-_reorder_wait=0
-while pgrep -q reorder_kernel 2>/dev/null; do
-	sleep 5
-	_reorder_wait=$((_reorder_wait + 5))
-	[ "$_reorder_wait" -ge 900 ] && break
-done
-[ "$_reorder_wait" -gt 0 ] && _info "reorder_kernel 完了待ち: ${_reorder_wait}秒"
-
+# 新規インストール直後は /etc/rc がバックグラウンドで起動する reorder_kernel
+# (KARL) が完了するまで syspatch は "cannot apply patches while reorder_kernel
+# is running" で拒否される (実際に発生)。事前に pgrep で存在確認しても、確認直後
+# に reorder_kernel が開始する競合が起こりうるため(実際に発生)、エラー文字列
+# そのものを見てリトライする (10秒間隔、最大10分)。
 _log "syspatch 適用"
-syspatch || _info "警告: syspatch に失敗しました (ミラー到達不可の可能性)。後で手動実行: syspatch"
+_syspatch_tries=0
+while :; do
+	_syspatch_out=$(syspatch 2>&1) && { [ -n "$_syspatch_out" ] && printf '%s\n' "$_syspatch_out"; break; }
+	case "$_syspatch_out" in
+	*"reorder_kernel is running"*)
+		_syspatch_tries=$((_syspatch_tries + 1))
+		if [ "$_syspatch_tries" -ge 60 ]; then
+			_info "警告: reorder_kernel 待ちが長すぎるため syspatch を断念しました。後で手動実行: syspatch"
+			break
+		fi
+		sleep 10
+		;;
+	*)
+		_info "警告: syspatch に失敗しました (ミラー到達不可の可能性)。後で手動実行: syspatch"
+		printf '%s\n' "$_syspatch_out"
+		break
+		;;
+	esac
+done
 _ok "syspatch"
 
 # ── パッケージ ────────────────────────────────────────────
