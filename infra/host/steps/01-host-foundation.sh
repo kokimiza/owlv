@@ -4,7 +4,7 @@
 # VM 構成に依存しない、ホスト OS 側の汎用セットアップのみを扱う。
 _step 1 "ホスト基盤セットアップ"
 
-install -d -m 750 /etc/owl
+install -d -m 750 /etc/owlv
 install -d -m 750 "$LOGDIR"
 
 # 管理スクリプトを配置
