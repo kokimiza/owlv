@@ -32,7 +32,16 @@ pkg_add curl 2>/dev/null || _info "警告: curl のインストールに失敗�
 _ok "パッケージ"
 
 # ── ログ受信ディレクトリ ────────────────────────────────────
-install -d -m 750 -o root -g wheel /var/log/audit
+# グループは wheel ではなく専用の owl-audit-read にする。wheel は doas.conf の
+# "permit persist :wheel"(物理コンソール管理者用)が参照する管理者グループ
+# であり、後段で _fohlen サービスアカウントをここに参加させる際に「wheel に
+# 入れる」という操作自体が doas 昇格グループへの参加に見えてしまう
+# (実害は無い — _fohlen は nologin かつパスワード未設定で persist 認証を
+# 開始できないが、読み取りのみのために doas 対象グループを使うのは紛らわしく、
+# レビュー時に意図を誤読されやすい)。最小権限の原則として読み取り専用の別
+# グループに分離する (doc/audit_engine.md §7)。
+groupadd owl-audit-read 2>/dev/null || true
+install -d -m 750 -o root -g owl-audit-read /var/log/audit
 _ok "/var/log/audit 作成"
 
 # ── syslogd: 他 VM / ホストからの auth.* を受信 ──────────────────
@@ -58,7 +67,7 @@ _ok "syslogd 再起動 (UDP/514 受信)"
 # ログ肥大化とディスク枯渇を招く(doc/dev_sec_ops.md §6.3)。確定済みの過去ログに
 # 対してのみ owl-audit-seal.sh が事後的に sappnd を付与する。
 grep -qF '/var/log/audit/remote.log' /etc/newsyslog.conf 2>/dev/null || {
-	printf '/var/log/audit/remote.log\troot:wheel\t640\t30\t1024\t*\tB\n' >>/etc/newsyslog.conf
+	printf '/var/log/audit/remote.log\troot:owl-audit-read\t640\t30\t1024\t*\tB\n' >>/etc/newsyslog.conf
 	_ok "newsyslog.conf にローテーション設定を追加 (30世代, gzip)"
 }
 
@@ -295,12 +304,17 @@ _fohlen_install() {
 	_ok "fohlen ${FOHLEN_TAG} を三重検証(署名/uname -r/SHA256)のうえ配置"
 
 	# ── _fohlen 専用サービスアカウント (doc/audit_engine.md §3, §7) ──────
-	# nologin・doasルールなし。/var/log/audit (root:wheel, 750) の読み取りのみ
-	# wheel 経由で得る。書き込み権限は一切持たない。
+	# nologin・doasルールなし。/var/log/audit (root:owl-audit-read, 750) の
+	# 読み取りのみを専用グループ経由で得る。書き込み権限は一切持たない。
+	# wheel は使わない — doas.conf の "permit persist :wheel" が参照する
+	# 管理者グループであり、読み取り専用のサービスアカウントをそこに混在
+	# させると権限境界の意図が紛らわしくなる(実害は無いが最小権限の原則違反)。
 	id _fohlen >/dev/null 2>&1 || useradd -s /sbin/nologin -d /nonexistent _fohlen
-	usermod -G wheel _fohlen 2>/dev/null || true
+	usermod -G owl-audit-read _fohlen 2>/dev/null || true
 
-	install -d -m 750 -o _fohlen -g wheel /var/db/fohlen
+	# /var/db/fohlen はグループアクセスを必要としない (_fohlen の単一プロセス
+	# のみが読み書きする) ため 700 のオーナー限定にする。
+	install -d -m 700 -o _fohlen /var/db/fohlen
 	install -d -m 700 -o _fohlen /var/db/fohlen/state
 	install -d -m 700 -o _fohlen /var/db/fohlen/tmp
 	_ok "/var/db/fohlen (_fohlen 所有) 作成"
