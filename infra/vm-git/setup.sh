@@ -271,6 +271,21 @@ BOT_TOKEN=$(su -m git -c "forgejo admin user generate-access-token \
 [ -n "$BOT_TOKEN" ] || _die "ボットトークンが空でした"
 _ok "ボットトークン発行"
 
+# Audit VM 専用の読み取り専用トークン (doc/audit_engine.md §10)。
+# REQUIRE_SIGNIN_VIEW = true (上記) により匿名API呼び出しは全面禁止される
+# ("Only signed in user is allowed to call APIs.") ため、fohlen のリリース
+# 取得確認にはトークンが必須。write:repository を持つ BOT_TOKEN をそのまま
+# Audit VM に渡すと最小権限の原則に反する (Audit VM は nologin・doas権限なし
+# が前提の設計、doc/dev_sec_ops.md §6.2) ため、read:repository のみの
+# 別トークンを発行する。
+_log "Audit VM 用の読み取り専用トークンを発行"
+AUDIT_READ_TOKEN=$(su -m git -c "forgejo admin user generate-access-token \
+	--username ${FORGEJO_ADMIN_USER} --token-name 'owlv-audit-read-$(date +%s)' --scopes read:repository --raw \
+	--config ${FORGEJO_DATA}/custom/conf/app.ini") ||
+	_die "Audit VM 用トークンの発行に失敗しました"
+[ -n "$AUDIT_READ_TOKEN" ] || _die "Audit VM 用トークンが空でした"
+_ok "Audit VM 用読み取り専用トークン発行"
+
 API="http://${OWL_GIT_IP}:3000/api/v1"
 
 # git smart HTTP (clone/push) の認証先は REST API ("Authorization: token ...")
@@ -364,3 +379,6 @@ echo "   なし (リポジトリ作成・build.yml 反映・ブランチ保護�
 echo ""
 # 08-vm-provision.sh が標準出力からこの行を捕捉して /etc/owlv/forgejo_token (ホスト) へ書き込む。
 echo "DEPLOY_POLL_TOKEN=${BOT_TOKEN}"
+# 08-vm-provision.sh が標準出力からこの行を捕捉して /etc/owlv/audit_releases_token (ホスト) へ書き込み、
+# vm-audit プロビジョニング時に /provision/audit-releases-token として配布する。
+echo "AUDIT_RELEASES_TOKEN=${AUDIT_READ_TOKEN}"
