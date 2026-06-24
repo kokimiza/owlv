@@ -10,19 +10,24 @@ import Core.Domain.AccountingPeriod (AccountingPeriodId)
 import Core.Domain.CashTransaction (CashTransaction)
 import Core.Domain.Ecl (EclMeasurement)
 import Core.Domain.EmployeeBenefit (BenefitLiability)
+import Core.Domain.ExternalOrder (ExternalOrder, ExternalOrderId, SingleTransaction)
 import Core.Domain.FixedAsset (ComponentId, FixedAsset, FixedAssetId)
 import Core.Domain.FxRate (FxRate)
 import Core.Domain.Journal (JournalEntry)
 import Core.Domain.JudgmentLog (JudgmentLog)
+import Core.Domain.ManagementAccounting (BudgetAlertId, KpiThreshold, KpiThresholdId)
 import Core.Domain.Money (Money)
 import Core.Domain.OrgPermission (PermScope)
 import Core.Domain.Organisation (Organisation, OrganisationId)
-import Core.Domain.Partner (Partner)
+import Core.Domain.Partner (Partner, PartnerId)
+import Core.Domain.Personnel (ContractTerm, Personnel, PersonnelId)
+import Core.Domain.Project (Project, ProjectId, ProjectPhase, ProjectPhaseId)
 import Core.Domain.Reconciliation (Reconciliation, ReconciliationId)
 import Core.Domain.SubAccount (SubAccount)
 import Core.Domain.Tax (TaxEntry)
 import Core.Domain.Tenant (Tenant, TenantId)
 import Core.Domain.User (Role, SshPubKey, UserId)
+import Core.Domain.WorkAssignment (TimesheetEntry, WorkAssignmentId)
 
 data Command
   = RecordJournalEntry JournalEntry
@@ -116,4 +121,35 @@ data Command
     RecordUserOsDrift UserId Text
   | -- | Shell が SSH 確立を観測した結果を報告する内部コマンド
     RecordUserLoginObserved UserId UTCTime (Maybe Text)
+  | -- プロジェクト管理 (doc/project_management.md §2) ──────────────────────
+    OpenProject Project
+  | AddProjectPhase ProjectPhase
+  | -- | 対象Project, 新予算総額, 改定理由
+    ReviseProjectBudget ProjectId Money Text
+  | PlaceExternalOrder ExternalOrder
+  | -- | 対象発注, 検収日, 今回確認した数量（累積ではなく増分）
+    ConfirmExternalOrderDelivery ExternalOrderId Day Int
+  | -- | 対象発注, 理由
+    CancelExternalOrder ExternalOrderId Text
+  | -- | doc/project_management.md §6: 即時単発取引。商品マスタを介さず
+    -- 極小のワークフロー(Project)として自動的に開いて閉じる。
+    RecordSingleTransaction SingleTransaction OrganisationId TenantId
+  | CloseProject ProjectId Day
+  | -- 労務人事 (doc/labor_management.md §3) ────────────────────────────────
+    RegisterPersonnel Personnel
+  | RecordContractTerm ContractTerm
+  | -- | 新規WorkAssignmentId, 起因ExternalOrderId, 対象Project, 対象Phase,
+    -- 発注先PartnerId（Personnelの照合キー）, 割当日
+    CreateWorkAssignment WorkAssignmentId ExternalOrderId ProjectId (Maybe ProjectPhaseId) PartnerId Day
+  | RecordTimesheetEntry TimesheetEntry
+  | CompleteWorkAssignment WorkAssignmentId Day
+  | SuspendPersonnel PersonnelId
+  | ReactivatePersonnel PersonnelId
+  | MarkPersonnelDeparted PersonnelId
+  | -- 管理会計 (doc/management_accounting.md §2) ────────────────────────────
+    SetKpiThreshold KpiThreshold
+  | RetireKpiThreshold KpiThresholdId
+  | -- | 新規BudgetAlertId（しきい値超過時のみ使用、超過なしなら無視される）,
+    -- 対象Project, 対象Phase, 評価時刻, 起因ExternalOrder（任意）
+    EvaluateBudgetConsumption BudgetAlertId ProjectId (Maybe ProjectPhaseId) UTCTime (Maybe ExternalOrderId)
   deriving (Eq, Show)

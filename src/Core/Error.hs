@@ -8,16 +8,21 @@ import Core.Domain.AccountCode (AccountCode)
 import Core.Domain.AccountingPeriod (AccountingPeriodId)
 import Core.Domain.CashTransaction (CashTransactionId)
 import Core.Domain.Ecl (EclMeasurementId)
+import Core.Domain.ExternalOrder (ExternalOrderId)
 import Core.Domain.FixedAsset (ComponentId, FixedAssetId)
 import Core.Domain.FxRate (FxRateId)
 import Core.Domain.Journal (JournalActionType, JournalEntryId)
 import Core.Domain.JudgmentLog (JudgmentLogId)
+import Core.Domain.ManagementAccounting (KpiThresholdId)
 import Core.Domain.Money (Money)
 import Core.Domain.OrgPermission (PermScope)
 import Core.Domain.Organisation (OrganisationId)
+import Core.Domain.Personnel (ContractTermId, PersonnelId)
+import Core.Domain.Project (ProjectId, ProjectPhaseId)
 import Core.Domain.Reconciliation (ReconciliationId)
 import Core.Domain.Tenant (TenantId)
 import Core.Domain.User (UserId)
+import Core.Domain.WorkAssignment (TimesheetEntryId, WorkAssignmentId)
 
 data DomainError
   = -- | 借貸不一致 (§4.1)
@@ -152,4 +157,60 @@ data DomainError
     UserTenantAccessNotFound UserId TenantId
   | -- | ホームテナントへのアクセスは剥奪不可
     CannotRevokeHomeTenantAccess UserId TenantId
+  | {- | プロジェクト管理エラー (doc/project_management.md §2) ─────────────
+    | 同一IDのProjectが既に登録済み
+    -}
+    DuplicateProjectId ProjectId
+  | -- | Projectが存在しない
+    ProjectNotFound ProjectId
+  | -- | Closed/Cancelled なProjectへの発注
+    ProjectNotOpenForOrders ProjectId
+  | -- | 既にClosed/CancelledなProjectへの操作
+    ProjectAlreadyClosed ProjectId
+  | -- | 同一IDのProjectPhaseが既に登録済み
+    DuplicateProjectPhaseId ProjectPhaseId
+  | -- | 指定されたProjectPhaseが当該Projectに存在しない
+    ProjectPhaseNotFound ProjectPhaseId
+  | -- | Phase予算合計がProject予算総額を超過する (期待上限, 試算合計)
+    PhaseBudgetExceedsProjectBudget ProjectId Money Money
+  | -- | 予算改定後の総額がPhase予算合計を下回る (新総額, Phase合計)
+    ProjectBudgetBelowPhaseCommitments ProjectId Money Money
+  | -- | 同一IDのExternalOrderが既に登録済み
+    DuplicateExternalOrderId ExternalOrderId
+  | -- | ExternalOrderが存在しない
+    ExternalOrderNotFound ExternalOrderId
+  | -- | Delivered/Cancelled 済みのExternalOrderへの変更操作
+    ExternalOrderAlreadyFinalized ExternalOrderId
+  | -- | 検収数量が発注数量を超過する (発注数量, 試算後の確認済み合計)
+    DeliveredQuantityExceedsOrder ExternalOrderId Int Int
+  | -- | RecordSingleTransaction が指定したProjectIdが既に使用済み
+    DuplicateSingleTransactionProject ProjectId
+  | {- | 労務人事エラー (doc/labor_management.md §3) ───────────────────────
+    | 同一IDのPersonnelが既に登録済み
+    -}
+    DuplicatePersonnelId PersonnelId
+  | -- | Personnelが存在しない
+    PersonnelNotFound PersonnelId
+  | -- | 既にDeparted済みのPersonnelへの操作
+    PersonnelAlreadyDeparted PersonnelId
+  | -- | 同一IDのContractTermが既に登録済み
+    DuplicateContractTermId ContractTermId
+  | -- | 同一IDのWorkAssignmentが既に登録済み
+    DuplicateWorkAssignmentId WorkAssignmentId
+  | -- | WorkAssignmentが存在しない
+    WorkAssignmentNotFound WorkAssignmentId
+  | -- | Completed/Cancelled 済みのWorkAssignmentへの変更操作
+    WorkAssignmentAlreadyFinalized WorkAssignmentId
+  | -- | 同一IDのTimesheetEntryが既に登録済み
+    DuplicateTimesheetEntryId TimesheetEntryId
+  | {- | 管理会計エラー (doc/management_accounting.md §2) ──────────────────
+    | 同一IDのKpiThresholdが既に登録済み
+    -}
+    DuplicateKpiThresholdId KpiThresholdId
+  | -- | KpiThresholdが存在しない
+    KpiThresholdNotFound KpiThresholdId
+  | -- | 既にRetired済みのKpiThresholdへの再Retire
+    KpiThresholdAlreadyRetired KpiThresholdId
+  | -- | 閾値の数値が不正（負値・warn>=critical等）
+    InvalidKpiThresholdValue Text
   deriving (Eq, Show)

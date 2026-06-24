@@ -11,18 +11,23 @@ import Core.Domain.AccountMaster (AccountMaster (..), SettlementBehavior (..))
 import Core.Domain.CashTransaction (CashTransaction (..))
 import Core.Domain.Ecl (EclMeasurement (..))
 import Core.Domain.EmployeeBenefit (BenefitLiability (..))
+import Core.Domain.ExternalOrder (ExternalOrder (..), ExternalOrderId, OrderStatus (..), SingleTransaction (..))
 import Core.Domain.FixedAsset (ComponentId, FixedAsset (..), FixedAssetId)
 import Core.Domain.FxRate (FxRate (..))
 import Core.Domain.Journal (JournalEntry (..), JournalLine (..), entryId)
 import Core.Domain.JudgmentLog (JudgmentLog (..))
+import Core.Domain.ManagementAccounting (BudgetAlert (..), KpiThreshold (..))
 import Core.Domain.Money (addMoney, subtractMoney, zeroMoney)
 import Core.Domain.Organisation (Organisation (..))
 import Core.Domain.Partner (Partner (..))
+import Core.Domain.Personnel (ContractTerm (..), Personnel (..), PersonnelId, PersonnelStatus (..))
+import Core.Domain.Project (Project (..), ProjectId, ProjectPhase (..), ProjectStatus (..))
 import Core.Domain.Reconciliation (Reconciliation (..), ReconciliationItem (..))
 import Core.Domain.SubAccount (SubAccount (..))
 import Core.Domain.Tax (TaxEntry (..))
 import Core.Domain.Tenant (Tenant (..), TenantId, TenantStatus (..))
 import Core.Domain.User (OsUid (..), User (..), UserId, UserStatus (..))
+import Core.Domain.WorkAssignment (WorkAssignment (..), WorkAssignmentStatus (..))
 import Core.Event (Event (..))
 import Core.State
   ( AppBook (..)
@@ -33,10 +38,15 @@ import Core.State
   , FxBook (..)
   , JournalBook (..)
   , JudgmentLogBook (..)
+  , LaborBook (..)
+  , ManagementAccountingBook (..)
   , MasterBook (..)
   , PeriodsBook (..)
+  , ProjectAggregate (..)
+  , ProjectBook (..)
   , TaxBook (..)
   , UserBook (..)
+  , initialProjectAggregate
   )
 
 import Core.Domain.AccountingPeriod qualified as AP
@@ -287,6 +297,75 @@ evolve book (UserOsSyncSucceeded uid) =
 evolve book (UserOsSyncFailed _uid _reason) = book
 evolve book (UserOsDriftDetected _uid _detail) = book
 evolve book (UserLoginObserved _uid _at _srcIp) = book
+-- ── プロジェクト管理 (doc/project_management.md §2.3) ────────────────────────
+
+evolve book (ProjectOpened p) =
+  updateProjects book $ \pb ->
+    pb{projects = Map.insert (projectId p) (initialProjectAggregate p) (projects pb)}
+evolve book (ProjectPhaseAdded phase) =
+  updateProjectAggregate book (phaseProject phase) $ \pa ->
+    pa{paPhases = Map.insert (phaseId phase) phase (paPhases pa)}
+evolve book (ProjectBudgetRevised pid newTotal _reason) =
+  updateProjectAggregate book pid $ \pa ->
+    pa{paProject = (paProject pa){projectBudgetTotal = newTotal}}
+evolve book (ExternalOrderPlaced o) =
+  updateProjectAggregate book (orderProject o) $ \pa ->
+    pa{paOrders = Map.insert (orderId o) o (paOrders pa)}
+evolve book (ExternalOrderDeliveryConfirmed oid _day qty) =
+  updateOrderInAnyProject book oid $ \o ->
+    let newDelivered = orderDeliveredQuantity o + qty
+        newStatus =
+          if newDelivered >= orderQuantity o then OrderDelivered else OrderPartiallyDelivered
+    in o{orderDeliveredQuantity = newDelivered, orderStatus = newStatus}
+evolve book (ExternalOrderCancelled oid _reason) =
+  updateOrderInAnyProject book oid $ \o -> o{orderStatus = OrderCancelled}
+evolve book (SingleTransactionRecorded stx) =
+  updateProjectAggregate book (stxProject stx) $ \pa ->
+    pa{paSingleTransactions = Map.insert (stxId stx) stx (paSingleTransactions pa)}
+evolve book (ProjectClosed pid _day) =
+  updateProjectAggregate book pid $ \pa ->
+    pa{paProject = (paProject pa){projectStatus = ProjectStatusClosed}}
+-- ── 労務人事 (doc/labor_management.md §3) ────────────────────────────────────
+
+evolve book (PersonnelRegistered p) =
+  updateLabor book $ \lb ->
+    lb{personnelRecords = Map.insert (personnelId p) p (personnelRecords lb)}
+evolve book (ContractTermRecorded ct) =
+  updateLabor book $ \lb -> lb{contractTerms = Map.insert (ctId ct) ct (contractTerms lb)}
+evolve book (WorkAssignmentCreated wa) =
+  updateLabor book $ \lb ->
+    lb{workAssignments = Map.insert (waId wa) wa (workAssignments lb)}
+-- \| 監査証跡はイベントストア自体（doc/labor_management.md §2.1）。読みモデルは変えない
+-- (UserOsSyncFailed と同じ思想)。
+evolve book (PersonnelReconciliationFailed _oid _reason) = book
+evolve book (TimesheetEntryRecorded e) =
+  updateLabor book $ \lb -> lb{timesheetEntries = Map.insert (tsId e) e (timesheetEntries lb)}
+evolve book (WorkAssignmentCompleted waid _day) =
+  updateLabor book $ \lb ->
+    lb
+      { workAssignments =
+          Map.adjust
+            (\wa -> wa{waStatus = WorkAssignmentStatusCompleted})
+            waid
+            (workAssignments lb)
+      }
+evolve book (PersonnelSuspended pid) =
+  updatePersonnel book pid (\p -> p{personnelStatus = PersonnelStatusSuspended})
+evolve book (PersonnelReactivated pid) =
+  updatePersonnel book pid (\p -> p{personnelStatus = PersonnelStatusActive})
+evolve book (PersonnelDeparted pid) =
+  updatePersonnel book pid (\p -> p{personnelStatus = PersonnelStatusDeparted})
+-- ── 管理会計 (doc/management_accounting.md §2) ───────────────────────────────
+
+evolve book (KpiThresholdSet kt) =
+  updateManagementAccounting book $ \mb ->
+    mb{kpiThresholds = Map.insert (ktId kt) kt (kpiThresholds mb)}
+evolve book (KpiThresholdRetired ktid) =
+  updateManagementAccounting book $ \mb ->
+    mb{kpiThresholds = Map.adjust (\kt -> kt{ktRetired = True}) ktid (kpiThresholds mb)}
+evolve book (BudgetThresholdBreached alert) =
+  updateManagementAccounting book $ \mb ->
+    mb{budgetAlerts = Map.insert (baId alert) alert (budgetAlerts mb)}
 
 -- ── helpers ────────────────────────────────────────────────────────────────
 
@@ -321,3 +400,36 @@ updateUsers book f = book{appUsers = f (appUsers book)}
 updateUser :: AppBook -> UserId -> (User -> User) -> AppBook
 updateUser book uid f =
   updateUsers book (\ub -> ub{users = Map.adjust f uid (users ub)})
+
+-- ── プロジェクト管理ヘルパー (doc/project_management.md §2.3) ────────────────
+
+updateProjects :: AppBook -> (ProjectBook -> ProjectBook) -> AppBook
+updateProjects book f = book{appProjects = f (appProjects book)}
+
+updateProjectAggregate :: AppBook -> ProjectId -> (ProjectAggregate -> ProjectAggregate) -> AppBook
+updateProjectAggregate book pid f =
+  updateProjects book (\pb -> pb{projects = Map.adjust f pid (projects pb)})
+
+{- | 発注がどの Project に属するかを線形探索して更新する。decide が整合性を
+保証しているため、見つからない場合は何もしない（イベントストアの整合性違反；
+他の `update*` ヘルパーと同じ防御方針、doc/dev_sec_ops.md 系の他箇所参照）。
+-}
+updateOrderInAnyProject :: AppBook -> ExternalOrderId -> (ExternalOrder -> ExternalOrder) -> AppBook
+updateOrderInAnyProject book oid f =
+  updateProjects book $ \pb ->
+    pb{projects = Map.map (\pa -> pa{paOrders = Map.adjust f oid (paOrders pa)}) (projects pb)}
+
+-- ── 労務人事ヘルパー (doc/labor_management.md §3) ────────────────────────────
+
+updateLabor :: AppBook -> (LaborBook -> LaborBook) -> AppBook
+updateLabor book f = book{appLabor = f (appLabor book)}
+
+updatePersonnel :: AppBook -> PersonnelId -> (Personnel -> Personnel) -> AppBook
+updatePersonnel book pid f =
+  updateLabor book (\lb -> lb{personnelRecords = Map.adjust f pid (personnelRecords lb)})
+
+-- ── 管理会計ヘルパー (doc/management_accounting.md §2) ───────────────────────
+
+updateManagementAccounting ::
+  AppBook -> (ManagementAccountingBook -> ManagementAccountingBook) -> AppBook
+updateManagementAccounting book f = book{appManagementAccounting = f (appManagementAccounting book)}

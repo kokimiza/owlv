@@ -11,19 +11,24 @@ import Core.Domain.AccountingPeriod (AccountingPeriodId)
 import Core.Domain.CashTransaction (CashTransaction)
 import Core.Domain.Ecl (EclMeasurement)
 import Core.Domain.EmployeeBenefit (BenefitLiability)
+import Core.Domain.ExternalOrder (ExternalOrder, ExternalOrderId, SingleTransaction)
 import Core.Domain.FixedAsset (ComponentId, FixedAsset, FixedAssetId)
 import Core.Domain.FxRate (FxRate)
 import Core.Domain.Journal (JournalEntry)
 import Core.Domain.JudgmentLog (JudgmentLog)
+import Core.Domain.ManagementAccounting (BudgetAlert, KpiThreshold, KpiThresholdId)
 import Core.Domain.Money (Money)
 import Core.Domain.OrgPermission (PermScope)
 import Core.Domain.Organisation (Organisation, OrganisationId)
 import Core.Domain.Partner (Partner)
+import Core.Domain.Personnel (ContractTerm, Personnel, PersonnelId)
+import Core.Domain.Project (Project, ProjectId, ProjectPhase)
 import Core.Domain.Reconciliation (Reconciliation, ReconciliationId)
 import Core.Domain.SubAccount (SubAccount)
 import Core.Domain.Tax (TaxEntry)
 import Core.Domain.Tenant (Tenant, TenantId)
 import Core.Domain.User (OsUid, Role, SshPubKey, UserId)
+import Core.Domain.WorkAssignment (TimesheetEntry, WorkAssignment, WorkAssignmentId)
 
 data Event
   = JournalEntryRecorded JournalEntry
@@ -92,6 +97,32 @@ data Event
   | UserOsSyncFailed UserId Text
   | UserOsDriftDetected UserId Text
   | UserLoginObserved UserId UTCTime (Maybe Text)
+  | -- プロジェクト管理 (doc/project_management.md §2) ──────────────────────
+    ProjectOpened Project
+  | ProjectPhaseAdded ProjectPhase
+  | ProjectBudgetRevised ProjectId Money Text
+  | -- | ユーザー提示例の核心: 「外部A氏に背景5枚を発注、単価5万」
+    ExternalOrderPlaced ExternalOrder
+  | ExternalOrderDeliveryConfirmed ExternalOrderId Day Int
+  | ExternalOrderCancelled ExternalOrderId Text
+  | SingleTransactionRecorded SingleTransaction
+  | ProjectClosed ProjectId Day
+  | -- 労務人事 (doc/labor_management.md §3) ────────────────────────────────
+    PersonnelRegistered Personnel
+  | ContractTermRecorded ContractTerm
+  | WorkAssignmentCreated WorkAssignment
+  | -- | doc/labor_management.md §2.1: 照合失敗。握り潰さず財務会計の保留判断対象にもなる
+    PersonnelReconciliationFailed ExternalOrderId Text
+  | TimesheetEntryRecorded TimesheetEntry
+  | WorkAssignmentCompleted WorkAssignmentId Day
+  | PersonnelSuspended PersonnelId
+  | PersonnelReactivated PersonnelId
+  | PersonnelDeparted PersonnelId
+  | -- 管理会計 (doc/management_accounting.md §2) ────────────────────────────
+    KpiThresholdSet KpiThreshold
+  | KpiThresholdRetired KpiThresholdId
+  | -- | 管理会計モジュールが Event Store に書き込む唯一のイベント (doc/management_accounting.md §2)
+    BudgetThresholdBreached BudgetAlert
   deriving (Eq, Show)
 
 instance ToJSON Event where
@@ -252,6 +283,71 @@ instance ToJSON Event where
       , "at" .= at
       , "srcIp" .= srcIp
       ]
+  -- プロジェクト管理
+  toJSON (ProjectOpened p) =
+    object ["type" .= ("ProjectOpened" :: Text), "data" .= p]
+  toJSON (ProjectPhaseAdded ph) =
+    object ["type" .= ("ProjectPhaseAdded" :: Text), "data" .= ph]
+  toJSON (ProjectBudgetRevised pid newTotal reason) =
+    object
+      [ "type" .= ("ProjectBudgetRevised" :: Text)
+      , "projectId" .= pid
+      , "newTotal" .= newTotal
+      , "reason" .= reason
+      ]
+  toJSON (ExternalOrderPlaced o) =
+    object ["type" .= ("ExternalOrderPlaced" :: Text), "data" .= o]
+  toJSON (ExternalOrderDeliveryConfirmed oid day qty) =
+    object
+      [ "type" .= ("ExternalOrderDeliveryConfirmed" :: Text)
+      , "orderId" .= oid
+      , "date" .= day
+      , "quantity" .= qty
+      ]
+  toJSON (ExternalOrderCancelled oid reason) =
+    object
+      [ "type" .= ("ExternalOrderCancelled" :: Text)
+      , "orderId" .= oid
+      , "reason" .= reason
+      ]
+  toJSON (SingleTransactionRecorded stx) =
+    object ["type" .= ("SingleTransactionRecorded" :: Text), "data" .= stx]
+  toJSON (ProjectClosed pid day) =
+    object ["type" .= ("ProjectClosed" :: Text), "projectId" .= pid, "date" .= day]
+  -- 労務人事
+  toJSON (PersonnelRegistered p) =
+    object ["type" .= ("PersonnelRegistered" :: Text), "data" .= p]
+  toJSON (ContractTermRecorded ct) =
+    object ["type" .= ("ContractTermRecorded" :: Text), "data" .= ct]
+  toJSON (WorkAssignmentCreated wa) =
+    object ["type" .= ("WorkAssignmentCreated" :: Text), "data" .= wa]
+  toJSON (PersonnelReconciliationFailed oid reason) =
+    object
+      [ "type" .= ("PersonnelReconciliationFailed" :: Text)
+      , "orderId" .= oid
+      , "reason" .= reason
+      ]
+  toJSON (TimesheetEntryRecorded e) =
+    object ["type" .= ("TimesheetEntryRecorded" :: Text), "data" .= e]
+  toJSON (WorkAssignmentCompleted waid day) =
+    object
+      [ "type" .= ("WorkAssignmentCompleted" :: Text)
+      , "assignmentId" .= waid
+      , "date" .= day
+      ]
+  toJSON (PersonnelSuspended pid) =
+    object ["type" .= ("PersonnelSuspended" :: Text), "personnelId" .= pid]
+  toJSON (PersonnelReactivated pid) =
+    object ["type" .= ("PersonnelReactivated" :: Text), "personnelId" .= pid]
+  toJSON (PersonnelDeparted pid) =
+    object ["type" .= ("PersonnelDeparted" :: Text), "personnelId" .= pid]
+  -- 管理会計
+  toJSON (KpiThresholdSet kt) =
+    object ["type" .= ("KpiThresholdSet" :: Text), "data" .= kt]
+  toJSON (KpiThresholdRetired ktid) =
+    object ["type" .= ("KpiThresholdRetired" :: Text), "thresholdId" .= ktid]
+  toJSON (BudgetThresholdBreached alert) =
+    object ["type" .= ("BudgetThresholdBreached" :: Text), "data" .= alert]
 
 instance FromJSON Event where
   parseJSON = withObject "Event" $ \o -> do
@@ -348,4 +444,35 @@ instance FromJSON Event where
       "UserOsDriftDetected" -> UserOsDriftDetected <$> o .: "userId" <*> o .: "detail"
       "UserLoginObserved" ->
         UserLoginObserved <$> o .: "userId" <*> o .: "at" <*> o .: "srcIp"
+      -- プロジェクト管理
+      "ProjectOpened" -> ProjectOpened <$> o .: "data"
+      "ProjectPhaseAdded" -> ProjectPhaseAdded <$> o .: "data"
+      "ProjectBudgetRevised" ->
+        ProjectBudgetRevised <$> o .: "projectId" <*> o .: "newTotal" <*> o .: "reason"
+      "ExternalOrderPlaced" -> ExternalOrderPlaced <$> o .: "data"
+      "ExternalOrderDeliveryConfirmed" ->
+        ExternalOrderDeliveryConfirmed
+          <$> o .: "orderId"
+          <*> o .: "date"
+          <*> o .: "quantity"
+      "ExternalOrderCancelled" ->
+        ExternalOrderCancelled <$> o .: "orderId" <*> o .: "reason"
+      "SingleTransactionRecorded" -> SingleTransactionRecorded <$> o .: "data"
+      "ProjectClosed" -> ProjectClosed <$> o .: "projectId" <*> o .: "date"
+      -- 労務人事
+      "PersonnelRegistered" -> PersonnelRegistered <$> o .: "data"
+      "ContractTermRecorded" -> ContractTermRecorded <$> o .: "data"
+      "WorkAssignmentCreated" -> WorkAssignmentCreated <$> o .: "data"
+      "PersonnelReconciliationFailed" ->
+        PersonnelReconciliationFailed <$> o .: "orderId" <*> o .: "reason"
+      "TimesheetEntryRecorded" -> TimesheetEntryRecorded <$> o .: "data"
+      "WorkAssignmentCompleted" ->
+        WorkAssignmentCompleted <$> o .: "assignmentId" <*> o .: "date"
+      "PersonnelSuspended" -> PersonnelSuspended <$> o .: "personnelId"
+      "PersonnelReactivated" -> PersonnelReactivated <$> o .: "personnelId"
+      "PersonnelDeparted" -> PersonnelDeparted <$> o .: "personnelId"
+      -- 管理会計
+      "KpiThresholdSet" -> KpiThresholdSet <$> o .: "data"
+      "KpiThresholdRetired" -> KpiThresholdRetired <$> o .: "thresholdId"
+      "BudgetThresholdBreached" -> BudgetThresholdBreached <$> o .: "data"
       _ -> fail ("unknown Event type: " <> show typ)

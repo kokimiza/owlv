@@ -21,6 +21,14 @@ module Core.State
   , initialTaxBook
   , UserBook (..)
   , initialUserBook
+  , ProjectAggregate (..)
+  , initialProjectAggregate
+  , ProjectBook (..)
+  , initialProjectBook
+  , LaborBook (..)
+  , initialLaborBook
+  , ManagementAccountingBook (..)
+  , initialManagementAccountingBook
   , AppBook (..)
   , initialAppBook
   ) where
@@ -37,19 +45,24 @@ import Core.Domain.AccountingPeriod (AccountingPeriodId, PeriodStatus)
 import Core.Domain.CashTransaction (CashTransaction, CashTransactionId)
 import Core.Domain.Ecl (EclMeasurement, EclMeasurementId)
 import Core.Domain.EmployeeBenefit (BenefitLiability, BenefitLiabilityId)
+import Core.Domain.ExternalOrder (ExternalOrder, ExternalOrderId, SingleTransaction, SingleTransactionId)
 import Core.Domain.FixedAsset (ComponentId, FixedAsset, FixedAssetId)
 import Core.Domain.FxRate (FxRate, FxRateId)
 import Core.Domain.Journal (JournalEntry, JournalEntryId)
 import Core.Domain.JudgmentLog (JudgmentLog, JudgmentLogId)
+import Core.Domain.ManagementAccounting (BudgetAlert, BudgetAlertId, KpiThreshold, KpiThresholdId)
 import Core.Domain.Money (Money)
 import Core.Domain.OrgPermission (PermScope)
 import Core.Domain.Organisation (Organisation, OrganisationId)
 import Core.Domain.Partner (Partner, PartnerId)
+import Core.Domain.Personnel (ContractTerm, ContractTermId, Personnel, PersonnelId)
+import Core.Domain.Project (Project, ProjectId, ProjectPhase, ProjectPhaseId)
 import Core.Domain.Reconciliation (Reconciliation, ReconciliationId)
 import Core.Domain.SubAccount (SubAccount, SubAccountId)
 import Core.Domain.Tax (TaxEntry, TaxEntryId)
 import Core.Domain.Tenant (Tenant)
 import Core.Domain.User (OsUid, User, UserId, firstOsUid)
+import Core.Domain.WorkAssignment (TimesheetEntry, TimesheetEntryId, WorkAssignment, WorkAssignmentId)
 
 newtype JournalBook = JournalBook
   { journalEntries :: Map JournalEntryId JournalEntry
@@ -167,6 +180,55 @@ data UserBook = UserBook
 initialUserBook :: UserBook
 initialUserBook = UserBook Map.empty firstOsUid Map.empty
 
+{- | 1つのProjectに紐づく読みモデル (doc/project_management.md §2.3)。
+`paOrders`/`paSingleTransactions` から予算消化額(committed/incurred)を
+都度算出する — 別途累積フィールドを持たないことで、算出ロジックと
+保存された値が食い違うリスクを構造的に排除する (doc/management_accounting.md
+§1.1 の `pcsCommitted`/`pcsIncurred` は CQRS リードモデル側の射影であり、
+ここでの算出と同じ式を使うが別の層に属する)。
+-}
+data ProjectAggregate = ProjectAggregate
+  { paProject :: Project
+  , paPhases :: Map ProjectPhaseId ProjectPhase
+  , paOrders :: Map ExternalOrderId ExternalOrder
+  , paSingleTransactions :: Map SingleTransactionId SingleTransaction
+  }
+  deriving (Eq, Show)
+
+initialProjectAggregate :: Project -> ProjectAggregate
+initialProjectAggregate p = ProjectAggregate p Map.empty Map.empty Map.empty
+
+-- | プロジェクト管理の読みモデル (doc/project_management.md)
+newtype ProjectBook = ProjectBook
+  { projects :: Map ProjectId ProjectAggregate
+  }
+  deriving (Eq, Show)
+
+initialProjectBook :: ProjectBook
+initialProjectBook = ProjectBook Map.empty
+
+-- | 労務人事の読みモデル (doc/labor_management.md)
+data LaborBook = LaborBook
+  { personnelRecords :: Map PersonnelId Personnel
+  , contractTerms :: Map ContractTermId ContractTerm
+  , workAssignments :: Map WorkAssignmentId WorkAssignment
+  , timesheetEntries :: Map TimesheetEntryId TimesheetEntry
+  }
+  deriving (Eq, Show)
+
+initialLaborBook :: LaborBook
+initialLaborBook = LaborBook Map.empty Map.empty Map.empty Map.empty
+
+-- | 管理会計の読みモデル (doc/management_accounting.md)
+data ManagementAccountingBook = ManagementAccountingBook
+  { kpiThresholds :: Map KpiThresholdId KpiThreshold
+  , budgetAlerts :: Map BudgetAlertId BudgetAlert
+  }
+  deriving (Eq, Show)
+
+initialManagementAccountingBook :: ManagementAccountingBook
+initialManagementAccountingBook = ManagementAccountingBook Map.empty Map.empty
+
 data AppBook = AppBook
   { appTenant :: Maybe Tenant
   {- ^ このAppBookが属するTenant。`TenantCreated` 以前は Nothing
@@ -183,6 +245,9 @@ data AppBook = AppBook
   , appBenefits :: BenefitBook
   , appTax :: TaxBook
   , appUsers :: UserBook
+  , appProjects :: ProjectBook
+  , appLabor :: LaborBook
+  , appManagementAccounting :: ManagementAccountingBook
   }
   deriving (Eq, Show)
 
@@ -201,3 +266,6 @@ initialAppBook =
     initialBenefitBook
     initialTaxBook
     initialUserBook
+    initialProjectBook
+    initialLaborBook
+    initialManagementAccountingBook
