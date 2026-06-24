@@ -98,18 +98,35 @@ _ok "カーネルパラメータ設定 (/etc/sysctl.conf に永続化 + 即時�
 # ── PostgreSQL 初期化 ─────────────────────────────────────
 _log "PostgreSQL 初期化"
 install -d -m 700 -o _postgresql /var/postgresql/data
-_initdb_log=/tmp/owl-initdb.log
-su -m _postgresql -c "initdb -D /var/postgresql/data --auth-local=trust --auth-host=scram-sha-256 --encoding=UTF8 --lc-collate=C --lc-ctype=C --pwprompt --no-instructions" \
-	<<'EOF' >"$_initdb_log" 2>&1 || {
+
+# 他の setup.sh (vm-ap/vm-git/vm-build/vm-audit) はすべて再実行可能だが、
+# initdb はデータディレクトリが空でないと即座に失敗するため、この VM だけ
+# 再プロビジョニングのたびに setup.sh 全体が initdb で死んでいた
+# (実際に発生)。PG_VERSION ファイル(initdb成功時に必ず作られる)の存在で
+# 「既に初期化済みか」を判定し、初期化済みならこのブロックを丸ごとスキップする。
+if [ -s /var/postgresql/data/PG_VERSION ]; then
+	_info "initdb は既に実行済み (PG_VERSION ファイルを検出) のためスキップ"
+else
+	_initdb_log=/tmp/owl-initdb.log
+	# --username=postgres 必須: 省略すると initdb はブートストラップ用スーパーユーザー
+	# ロールを「initdb を実行した OS ユーザー名」(_postgresql) で作成する。後段の
+	# 全コマンドは "psql -U postgres" を前提にしているため、これが無いと
+	# ロール "postgres" がそもそも存在せず、全件が "role does not exist" で失敗し、
+	# その失敗が "既に存在します" 側の || フォールバックに握り潰される
+	# (実際に発生: 初回実行でも DB ユーザー/データベースが一切作成されないまま
+	# "✓ DB ユーザー・データベース作成" が表示されていた)。
+	su -m _postgresql -c "initdb -D /var/postgresql/data --username=postgres --auth-local=trust --auth-host=scram-sha-256 --encoding=UTF8 --lc-collate=C --lc-ctype=C --pwprompt --no-instructions" \
+		<<'EOF' >"$_initdb_log" 2>&1 || {
 changeme_root_password
 changeme_root_password
 EOF
+		cat "$_initdb_log"
+		_die "initdb に失敗しました (詳細は上記出力を参照)"
+	}
 	cat "$_initdb_log"
-	_die "initdb に失敗しました (詳細は上記出力を参照)"
-}
-cat "$_initdb_log"
-rm -f "$_initdb_log"
-_ok "initdb 完了"
+	rm -f "$_initdb_log"
+	_ok "initdb 完了"
+fi
 
 # ── 設定ファイルの配置 ────────────────────────────────────
 _log "PostgreSQL 設定ファイルを配置"
