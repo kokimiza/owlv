@@ -88,6 +88,11 @@ _vm_provision() {
          FORGEJO_RUNNER_SECRET='${FORGEJO_RUNNER_SECRET}' \
          OWLV_ROOT_ADMIN_USERNAME='${OWLV_ROOT_ADMIN_USERNAME}' \
          OWL_AUDIT_NOTIFY_WEBHOOK='${OWL_AUDIT_NOTIFY_WEBHOOK}' \
+         APP_SSH_PORT='${APP_SSH_PORT}' DB_NAME='${DB_NAME}' \
+         DB_APP_USER='${DB_APP_USER}' DB_REPL_USER='${DB_REPL_USER}' \
+         DB_MIGRATOR_USER='${DB_MIGRATOR_USER}' \
+         DB_PLATFORM_ADMIN_USER='${DB_PLATFORM_ADMIN_USER}' \
+         DB_PROJECTOR_USER='${DB_PROJECTOR_USER}' \
          sh /provision/${vmname}/setup.sh"
 	if [ "$vmname" = "vm-git" ]; then
 		SETUP_OUTPUT=$(ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
