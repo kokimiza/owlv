@@ -119,10 +119,20 @@ _vm_provision() {
 		# 後続のVMプロビジョニングへ続行してしまった)。OpenBSD ksh には
 		# pipefail も PIPESTATUS も無いため、リモート側に自身の終了コードを
 		# 明示的に出力させて捕捉する。
-		SETUP_OUTPUT=$(ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-			"root@${vmip}" "${SETUP_CMD}; echo __OWL_SETUP_EXIT__=\$?" 2>&1 | tee /dev/stderr)
-		SETUP_EXIT=$(printf '%s\n' "$SETUP_OUTPUT" | awk -F= '/^__OWL_SETUP_EXIT__=/{print $2; exit}')
-		[ "$SETUP_EXIT" = "0" ] || _die "[${vmname}] setup.sh が失敗しました (exit ${SETUP_EXIT:-不明})"
+		#
+		# vm-git の setup.sh は npm/webpack のビルドログを含み出力が数MBになる。
+		# これをコマンド置換で変数 (SETUP_OUTPUT) に溜めて、後段で
+		# `printf '%s\n' "$SETUP_OUTPUT" | awk ...` のように引数として渡すと
+		# OS の引数長上限を超えて "Argument list too long" になる (実際に発生)。
+		# 変数を経由せず一時ファイルに書き、以降は awk にファイルパスだけを渡す。
+		SETUP_OUT_FILE=$(mktemp)
+		ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+			"root@${vmip}" "${SETUP_CMD}; echo __OWL_SETUP_EXIT__=\$?" 2>&1 | tee "$SETUP_OUT_FILE"
+		SETUP_EXIT=$(awk -F= '/^__OWL_SETUP_EXIT__=/{print $2; exit}' "$SETUP_OUT_FILE")
+		[ "$SETUP_EXIT" = "0" ] || {
+			rm -f "$SETUP_OUT_FILE"
+			_die "[${vmname}] setup.sh が失敗しました (exit ${SETUP_EXIT:-不明})"
+		}
 	else
 		ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
 			"root@${vmip}" "$SETUP_CMD"
@@ -130,7 +140,7 @@ _vm_provision() {
 	_log "[${vmname}] setup.sh 完了"
 
 	if [ "$vmname" = "vm-git" ]; then
-		DEPLOY_POLL_TOKEN=$(printf '%s\n' "$SETUP_OUTPUT" | awk -F= '/^DEPLOY_POLL_TOKEN=/{print $2; exit}')
+		DEPLOY_POLL_TOKEN=$(awk -F= '/^DEPLOY_POLL_TOKEN=/{print $2; exit}' "$SETUP_OUT_FILE")
 		if [ -n "$DEPLOY_POLL_TOKEN" ]; then
 			install -d -m 700 /etc/owlv
 			printf '%s' "$DEPLOY_POLL_TOKEN" >/etc/owlv/forgejo_token
@@ -140,7 +150,8 @@ _vm_provision() {
 			_info "[vm-git] 警告: deploy-poll トークンを取得できませんでした。setup.sh の出力を確認してください"
 		fi
 
-		AUDIT_RELEASES_TOKEN=$(printf '%s\n' "$SETUP_OUTPUT" | awk -F= '/^AUDIT_RELEASES_TOKEN=/{print $2; exit}')
+		AUDIT_RELEASES_TOKEN=$(awk -F= '/^AUDIT_RELEASES_TOKEN=/{print $2; exit}' "$SETUP_OUT_FILE")
+		rm -f "$SETUP_OUT_FILE"
 		if [ -n "$AUDIT_RELEASES_TOKEN" ]; then
 			install -d -m 700 /etc/owlv
 			printf '%s' "$AUDIT_RELEASES_TOKEN" >/etc/owlv/audit_releases_token
