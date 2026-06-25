@@ -147,9 +147,21 @@ if [ ! -f "$FORGEJO_BIN" ] || [ ! -d "$FORGEJO_STATIC_ROOT/options" ]; then
 		_die "Forgejo のビルドに失敗しました"
 
 	# フロントエンド (webpack): public/assets/{js,css,fonts} を生成する。
-	# NODE_ENV=production でソースマップ生成を抑えメモリ消費を下げる
-	# (development モードのままだと 2G でも OOM することがある、実際に発生)。
-	_info "フロントエンド (npm + webpack) をビルド中..."
+	# npm install (node_modules ターゲット) と webpack 本体を NODE_ENV=production
+	# 一括で実行すると、npm install 側にも NODE_ENV が効いて devDependencies
+	# (webpack 自体が import する license-checker-rseidelsohn 等) が
+	# インストールされず ERR_MODULE_NOT_FOUND になる (実際に発生:
+	# devDependencies込みなら1110パッケージのはずが499パッケージしか入らず失敗)。
+	# 依存インストールは NODE_ENV 無し (development 既定、devDeps含む全部入れる)
+	# で済ませ、webpack 本体の実行だけ NODE_ENV=production でメモリ消費を
+	# 下げる (development モードのままだと 2G でも OOM することがある、実際に発生)。
+	# gmake の node_modules ターゲットは package-lock.json より新しければ
+	# 再インストールしないので、2回目の gmake frontend 呼び出しでは
+	# npm install は走らず webpack だけ実行される。
+	_info "フロントエンド依存 (npm install) を取得中..."
+	(cd "$FORGEJO_SRC" && gmake node_modules) ||
+		_die "npm install に失敗しました"
+	_info "フロントエンド (webpack) をビルド中..."
 	(cd "$FORGEJO_SRC" && NODE_ENV=production gmake frontend) ||
 		_die "フロントエンドのビルドに失敗しました"
 	[ -f "${FORGEJO_SRC}/public/assets/js/index.js" ] ||
