@@ -82,7 +82,13 @@ _ok "syspatch"
 
 # ── パッケージ ────────────────────────────────────────────
 _log "パッケージインストール"
-pkg_add git sqlite3 2>/dev/null
+# bash: OpenBSD には標準で無いが、Forgejo の pre-receive 等 git フックスクリプトは
+# [git] SCRIPT_TYPE 設定 (下記) を無視して #!/usr/bin/env bash を生成する
+# (実際に発生: SCRIPT_TYPE=ksh を設定しても CLI警告は消えず、auto_init での
+# 初回push が "env: bash: No such file or directory" → pre-receive hook declined
+# → リポジトリ作成APIが 500 で失敗していた)。設定で回避するより bash 自体を
+# 入れる方が確実。
+pkg_add git sqlite3 bash 2>/dev/null
 _ok "git / sqlite3"
 
 # ── Forgejo ユーザー ─────────────────────────────────────
@@ -93,13 +99,16 @@ _ok "git ユーザー"
 
 # ── Forgejo バイナリ (OpenBSD: ソースからビルド) ─────────────────
 # 公式リリースは linux-amd64 / linux-arm64 のみ。OpenBSD は ELF ABI が異なるため実行不可 (§3.1)。
-# bindata タグなし: Web UI 資産は disk 上から読む。API と CLI のみ使用するため問題なし。
+# bindata タグなし: Web UI 資産は disk 上から読む (STATIC_ROOT_PATH 配下)。
 _log "Forgejo ${FORGEJO_VERSION} をソースからビルド"
 FORGEJO_BIN="/usr/local/bin/forgejo"
 FORGEJO_SRC="/tmp/forgejo-build"
 
 if [ ! -f "$FORGEJO_BIN" ] || [ ! -d "$FORGEJO_STATIC_ROOT/options" ]; then
-	pkg_add go 2>/dev/null || _die "go のインストールに失敗しました"
+	# node/gmake はフロントエンド (webpack) ビルド専用。webpack の JS heap は
+	# 1G の VM では OOM するため (実際に発生)、vmd.conf でこの VM に 2G を
+	# 割っている前提 (infra/host/conf/vmd.conf 参照)。
+	pkg_add go node gmake 2>/dev/null || _die "go/node/gmake のインストールに失敗しました"
 
 	ftp -o "${FORGEJO_SRC}.tar.gz" \
 		"https://codeberg.org/forgejo/forgejo/archive/v${FORGEJO_VERSION}.tar.gz" ||
@@ -137,8 +146,17 @@ if [ ! -f "$FORGEJO_BIN" ] || [ ! -d "$FORGEJO_STATIC_ROOT/options" ]; then
 		go build -tags 'sqlite sqlite_unlock_notify' -o "$FORGEJO_BIN" .) ||
 		_die "Forgejo のビルドに失敗しました"
 
-	# ビルド専用キャッシュなので完了後は破棄してディスクを回収する
-	rm -rf "$GOPATH"
+	# フロントエンド (webpack): public/assets/{js,css,fonts} を生成する。
+	# NODE_ENV=production でソースマップ生成を抑えメモリ消費を下げる
+	# (development モードのままだと 2G でも OOM することがある、実際に発生)。
+	_info "フロントエンド (npm + webpack) をビルド中..."
+	(cd "$FORGEJO_SRC" && NODE_ENV=production gmake frontend) ||
+		_die "フロントエンドのビルドに失敗しました"
+	[ -f "${FORGEJO_SRC}/public/assets/js/index.js" ] ||
+		_die "webpack 完了後も public/assets/js/index.js が見つかりません"
+
+	# ビルド専用キャッシュ/依存なので完了後は破棄してディスクを回収する
+	rm -rf "$GOPATH" "${FORGEJO_SRC}/node_modules"
 
 	# bindata タグなしビルドは options/ (ロケール) public/ templates/ を
 	# 実行時に disk から読む (STATIC_ROOT_PATH 配下)。ソースツリー削除前に
@@ -182,12 +200,6 @@ PATH     = ${FORGEJO_DATA}/forgejo.db
 [repository]
 ROOT = ${FORGEJO_DATA}/repositories
 
-[git]
-# OpenBSD には bash が標準で存在しないため、git フック用スクリプトの
-# シェルを ksh に固定する (git ユーザーのログインシェルと一致させる。
-# 既定値 bash は SCRIPT_TYPE 警告の原因)
-SCRIPT_TYPE = ksh
-
 [security]
 INSTALL_LOCK         = true
 SECRET_KEY           = ${FORGEJO_SECRET_KEY}
@@ -214,7 +226,7 @@ _ok "Forgejo 設定"
 _log "Forgejo サービス登録"
 cat >/etc/rc.d/forgejo <<'EOF'
 #!/bin/ksh
-# rc.subr は ksh 前提 (bash ではない。app.ini の [git] SCRIPT_TYPE と同様の理由)
+# rc.subr は ksh 前提 (bash ではない)
 daemon="/usr/local/bin/forgejo"
 daemon_user="git"
 daemon_flags="web --config /var/forgejo/custom/conf/app.ini"
@@ -256,12 +268,18 @@ done
 _ok "Forgejo DB 初期化確認"
 
 _log "管理者ユーザー作成 (${FORGEJO_ADMIN_USER})"
+# --must-change-password は付けない。この直後にリポジトリ作成・ブランチ保護・
+# workflow反映をこのアカウントのトークンで自動実行するが、Forgejo は
+# パスワード変更必須フラグが立ったユーザーのAPI操作を 403
+# "You must change your password" で拒否する (実際に発生: 人間がWeb UIで
+# 初回ログインしてパスワードを変更する前に自動化が走るため、フラグを立てると
+# 自動化と原理的に両立しない)。FORGEJO_ADMIN_PASS は openssl rand -base64 18
+# の24文字ランダム値なので、変更必須を強制しなくても初期値として十分強固。
 su -m git -c "forgejo admin user create \
 	--username ${FORGEJO_ADMIN_USER} \
 	--password '${FORGEJO_ADMIN_PASS}' \
 	--email ${FORGEJO_ADMIN_USER}@localhost \
 	--admin \
-	--must-change-password \
 	--config ${FORGEJO_DATA}/custom/conf/app.ini" 2>&1 | while read -r l; do _info "$l"; done
 # create の失敗理由が「既に存在」かどうかをエラー文字列で判定すると、
 # repo create の一件 (実在しないサブコマンドを `||` で握り潰し続行していた)
@@ -296,9 +314,16 @@ _ok "Runner vm-build 登録完了"
 # 標準出力経由で引き渡す (08-vm-provision.sh が DEPLOY_POLL_TOKEN= 行を捕捉して
 # /etc/owlv/forgejo_token へ書き込む)。
 _log "ボットトークンを発行"
+# forgejo CLI は app.ini の [git] SCRIPT_TYPE 設定に関わらず
+# `SCRIPT_TYPE "bash" is not on the current PATH` 警告を標準出力に吐く
+# (実際に発生)。`--raw` の出力と一緒にコマンド置換で拾われると、トークン文字列に
+# 警告行由来の改行が混入し、後で `Authorization: token <値>` ヘッダーに
+# そのまま使った際にヘッダー内改行注入扱いとなり net/http に素の 400 で
+# 拒否される (リポジトリ作成APIの 400 の真因はこれだった)。トークンは常に
+# 出力の最終行なので tail -n1 で確実に取り出す。
 BOT_TOKEN=$(su -m git -c "forgejo admin user generate-access-token \
 	--username ${FORGEJO_ADMIN_USER} --token-name 'owlv-bot-$(date +%s)' --scopes write:repository --raw \
-	--config ${FORGEJO_DATA}/custom/conf/app.ini") ||
+	--config ${FORGEJO_DATA}/custom/conf/app.ini" | tail -n1) ||
 	_die "ボットトークンの発行に失敗しました"
 [ -n "$BOT_TOKEN" ] || _die "ボットトークンが空でした"
 _ok "ボットトークン発行"
@@ -311,9 +336,10 @@ _ok "ボットトークン発行"
 # が前提の設計、doc/dev_sec_ops.md §6.2) ため、read:repository のみの
 # 別トークンを発行する。
 _log "Audit VM 用の読み取り専用トークンを発行"
+# BOT_TOKEN と同じ理由 (上記コメント参照) で tail -n1 が必要。
 AUDIT_READ_TOKEN=$(su -m git -c "forgejo admin user generate-access-token \
 	--username ${FORGEJO_ADMIN_USER} --token-name 'owlv-audit-read-$(date +%s)' --scopes read:repository --raw \
-	--config ${FORGEJO_DATA}/custom/conf/app.ini") ||
+	--config ${FORGEJO_DATA}/custom/conf/app.ini" | tail -n1) ||
 	_die "Audit VM 用トークンの発行に失敗しました"
 [ -n "$AUDIT_READ_TOKEN" ] || _die "Audit VM 用トークンが空でした"
 _ok "Audit VM 用読み取り専用トークン発行"
@@ -348,7 +374,11 @@ case "$_REPO_CREATE_STATUS" in
 	# 409(既存)以外の失敗は握り潰さず、応答本文を出して原因を判別できるようにする
 	# (実際に発生: 認証エラー等の本当の失敗が「既存のためスキップ」に化けていた)。
 	_log "リポジトリ作成 API 応答 (status=${_REPO_CREATE_STATUS}):"
-	while read -r l; do _info "$l"; done <"$_REPO_CREATE_BODY"
+	# curl の JSON エラー本文は末尾改行が無いことが多く、素の
+	# `while read -r l; do ...; done` だと最終行が改行無しで EOF になった
+	# 場合に read が失敗して読み捨てられる (実際に発生: 400 の本文が
+	# まるごと表示されず原因不明のまま _die していた)。
+	while IFS= read -r l || [ -n "$l" ]; do _info "$l"; done <"$_REPO_CREATE_BODY"
 	rm -f "$_REPO_CREATE_BODY"
 	_die "owlv リポジトリの作成に失敗しました (status=${_REPO_CREATE_STATUS})"
 	;;
