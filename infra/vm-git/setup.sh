@@ -162,7 +162,10 @@ if [ ! -f "$FORGEJO_BIN" ] || [ ! -d "$FORGEJO_STATIC_ROOT/options" ]; then
 	(cd "$FORGEJO_SRC" && gmake node_modules) ||
 		_die "npm install に失敗しました"
 	_info "フロントエンド (webpack) をビルド中..."
-	(cd "$FORGEJO_SRC" && NODE_ENV=production gmake frontend) ||
+	# OpenBSD既定のオープンファイル数上限 (ulimit -n) は低く、webpackが
+	# 多数のCSS/JSを並行処理すると "EMFILE: too many open files" で
+	# 失敗する (実際に発生)。このサブシェル内だけ上限を上げる。
+	(cd "$FORGEJO_SRC" && ulimit -n 4096 && NODE_ENV=production gmake frontend) ||
 		_die "フロントエンドのビルドに失敗しました"
 	[ -f "${FORGEJO_SRC}/public/assets/js/index.js" ] ||
 		_die "webpack 完了後も public/assets/js/index.js が見つかりません"
