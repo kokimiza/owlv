@@ -132,12 +132,12 @@ func Load(path string) (Config, error) {
 }
 
 func splitKV(line string) (key, value string, ok bool) {
-	idx := strings.Index(line, "=")
-	if idx < 0 {
+	before, after, ok0 := strings.Cut(line, "=")
+	if !ok0 {
 		return "", "", false
 	}
-	key = strings.TrimSpace(line[:idx])
-	value = strings.TrimSpace(line[idx+1:])
+	key = strings.TrimSpace(before)
+	value = strings.TrimSpace(after)
 	value = strings.Trim(value, `"`)
 	return key, value, key != ""
 }
