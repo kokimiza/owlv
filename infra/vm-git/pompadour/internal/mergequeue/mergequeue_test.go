@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -111,10 +112,8 @@ func TestProcessCycleSkipsPRWithUnmetDependency(t *testing.T) {
 func TestProcessCycleBisectsOnFailureAndEvictsOffender(t *testing.T) {
 	ctx := context.Background()
 	runner, rec := newTestRunner(t, func(ctx context.Context, scratch string, prs []int64) (bool, error) {
-		for _, pr := range prs {
-			if pr == 2 {
-				return false, nil
-			}
+		if slices.Contains(prs, 2) {
+			return false, nil
 		}
 		return true, nil
 	})
