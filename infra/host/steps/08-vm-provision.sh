@@ -113,8 +113,16 @@ _vm_provision() {
          DB_PROJECTOR_USER='${DB_PROJECTOR_USER}' \
          sh /provision/${vmname}/setup.sh"
 	if [ "$vmname" = "vm-git" ]; then
+		# "| tee" 越しだと set -eu 下でもパイプライン全体の終了コードは tee
+		# (常に0) になり setup.sh の _die が握り潰される (実際に発生: リポジトリ
+		# 作成失敗で setup.sh が exit 1 したのに「setup.sh 完了」と表示され
+		# 後続のVMプロビジョニングへ続行してしまった)。OpenBSD ksh には
+		# pipefail も PIPESTATUS も無いため、リモート側に自身の終了コードを
+		# 明示的に出力させて捕捉する。
 		SETUP_OUTPUT=$(ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-			"root@${vmip}" "$SETUP_CMD" 2>&1 | tee /dev/stderr)
+			"root@${vmip}" "${SETUP_CMD}; echo __OWL_SETUP_EXIT__=\$?" 2>&1 | tee /dev/stderr)
+		SETUP_EXIT=$(printf '%s\n' "$SETUP_OUTPUT" | awk -F= '/^__OWL_SETUP_EXIT__=/{print $2; exit}')
+		[ "$SETUP_EXIT" = "0" ] || _die "[${vmname}] setup.sh が失敗しました (exit ${SETUP_EXIT:-不明})"
 	else
 		ssh -i "$PROV_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
 			"root@${vmip}" "$SETUP_CMD"

@@ -91,30 +91,14 @@ chmod 644 /etc/firmware/vmm-bios 2>/dev/null || true
 # dev_lan (git_vm) は LAN から直接到達できない (エアギャップ設計)。
 # 開発者は `ssh -J <user>@<host> git@git_vm` の踏み台としてのみホストを使う。
 # シェルは与えず (ForceCommand /bin/false)、PermitOpen で git_vm:22 以外への
-# 転送をシグナル単位で禁止する。鍵を置くだけで開発者を追加/削除でき、
-# 退職時は対応する .pub を削除して再実行すれば失効する。
-GIT_JUMP_KEYS_DIR="${SELF}/host/conf/git-jump-keys"
+# 転送をシグナル単位で禁止する。
+#
+# アカウント作成/更新/失効ロジックは host/security/dev-join.sh の sync に
+# 一本化している (運用中に手動で叩く `dev-join.sh sync` と、provision 時の
+# 処理を同じ実装にして冪等性・再現性を保つため)。.pub を置くだけで開発者を
+# 追加でき、退職時は対応する .pub を削除して再実行すれば失効する。
 GIT_JUMP_GROUP="owl-git-jump"
-install -d -m 755 "$GIT_JUMP_KEYS_DIR"
-groupadd "$GIT_JUMP_GROUP" 2>/dev/null || true
-
-_log "git-jump アカウントを同期 (${GIT_JUMP_KEYS_DIR}/*.pub)..."
-_git_jump_n=0
-for _pub in "${GIT_JUMP_KEYS_DIR}"/*.pub; do
-	[ -f "$_pub" ] || continue
-	_user="$(basename "$_pub" .pub)"
-	if id "$_user" >/dev/null 2>&1; then
-		usermod -G "$GIT_JUMP_GROUP" -s /sbin/nologin "$_user"
-	else
-		useradd -m -G "$GIT_JUMP_GROUP" -s /sbin/nologin "$_user"
-	fi
-	install -d -m 700 -o "$_user" -g "$GIT_JUMP_GROUP" "/home/${_user}/.ssh"
-	install -m 600 -o "$_user" -g "$GIT_JUMP_GROUP" "$_pub" "/home/${_user}/.ssh/authorized_keys"
-	_info "git-jump アカウント: ${_user}"
-	_git_jump_n=$((_git_jump_n + 1))
-done
-[ "$_git_jump_n" -gt 0 ] || _info "鍵が見つかりません。追加するには ${GIT_JUMP_KEYS_DIR}/<user>.pub を配置してください"
-_ok "git-jump アカウント同期 (${_git_jump_n} 件)"
+sh "${SELF}/host/security/dev-join.sh" sync
 
 # sshd_config.d パターン: 繰り返し実行してもファイルを上書きするだけ (vm-ap/setup.sh と同方針)
 grep -qF 'Include /etc/ssh/sshd_config.d/*.conf' /etc/ssh/sshd_config ||

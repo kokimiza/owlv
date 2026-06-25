@@ -19,6 +19,12 @@ _die() {
 _info() { _log "    $*"; }
 
 [ "$(id -u)" -eq 0 ] || _die "root (doas) で実行してください"
+# ykman 自体が無い場合、後段の "ykman list | grep" は単に空入力になって
+# grep が exit 1 を返すだけなので、"Yubikeyが検出されません" という
+# 誤った原因のエラーで止まってしまう (実際に forgejo CLI の SCRIPT_TYPE 警告
+# 騒動で踏んだのと同種: コマンド不在がもっと下流の的外れなエラーに化ける)。
+# ここで command -v により先に切り分ける。
+command -v ykman >/dev/null 2>&1 || _die "ykman が見つかりません。pkg_add yubico-piv-tool を実行してください"
 
 # ── Yubikey 確認 ─────────────────────────────────────────
 _log "Yubikey を確認中..."
@@ -62,6 +68,10 @@ if [ -z "${SSH_PUB:-}" ]; then
 	SSH_PUB="$(ykman piv keys export --format ssh 9a - 2>/dev/null)" ||
 		_die "SSH 公開鍵の抽出に失敗しました。'ykman piv keys export --format ssh 9a -' を手動で実行してください"
 fi
+# コマンドが exit 0 でも出力が空という可能性 (vm-git/setup.sh のトークン取得で
+# 実際に踏んだのと同種の罠) をここで弾く。空のまま authorized_keys に
+# 追記すると壊れた行が増えるだけで気づきにくい。
+[ -n "$SSH_PUB" ] || _die "SSH公開鍵の抽出結果が空でした"
 
 _info "SSH 公開鍵:"
 _info "  ${SSH_PUB}"
@@ -106,7 +116,14 @@ fi
 _log "パスワード認証を無効化します"
 
 # 既存の sshd_config を更新
-sed -i \
+# OpenBSD (BSD) sed の -i は拡張子引数を必須で取る (空でも '' が必要)。
+# GNU sed と違い "-i -e '...'" と書くと直後の -e がその拡張子引数として
+# 食われてしまい、1個目の -e (PasswordAuthentication no への置換) が
+# 静かに無視される (実際に発生の可能性が高い: 2,3個目の -e は正しく
+# 適用されるためスクリプトは成功したように見えるが、肝心の
+# PasswordAuthentication 行だけ変更されずに残る)。vm-git/setup.sh の
+# tar --strip-components と同種のGNU/BSD方言差。
+sed -i '' \
 	-e 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' \
 	-e 's/^#*ChallengeResponseAuthentication.*/ChallengeResponseAuthentication no/' \
 	-e 's/^#*KbdInteractiveAuthentication.*/KbdInteractiveAuthentication no/' \
@@ -116,7 +133,7 @@ sed -i \
 if [ -d /etc/ssh/sshd_config.d ]; then
 	for conf in /etc/ssh/sshd_config.d/*.conf; do
 		[ -f "$conf" ] || continue
-		sed -i 's/^PasswordAuthentication.*/PasswordAuthentication no/' "$conf"
+		sed -i '' 's/^PasswordAuthentication.*/PasswordAuthentication no/' "$conf"
 	done
 fi
 
@@ -136,9 +153,12 @@ read -r DISABLE_SSHD
 
 if [ "$DISABLE_SSHD" = "yes" ]; then
 	rcctl disable sshd
-	# rc.conf.local を sshd=NO に更新
-	sed -i 's/^sshd=.*/sshd=NO/' /etc/rc.conf.local 2>/dev/null ||
+	# rc.conf.local を sshd=NO に更新 (BSD sed なので -i '' が必須、上記と同理由)
+	if [ -f /etc/rc.conf.local ] && grep -q '^sshd=' /etc/rc.conf.local; then
+		sed -i '' 's/^sshd=.*/sshd=NO/' /etc/rc.conf.local
+	else
 		echo 'sshd=NO' >>/etc/rc.conf.local
+	fi
 	_log "sshd を無効化しました。次回起動時から sshd は起動しません"
 else
 	_log "sshd は有効なまま維持します"
