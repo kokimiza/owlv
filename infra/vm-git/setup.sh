@@ -324,7 +324,12 @@ su -m git -c "forgejo forgejo-cli actions register \
 _ok "Runner vm-build 登録完了"
 
 # ── ボットトークン発行 (リポジトリ作成 / ブランチ保護 / deploy-poll 共用) ──
-# HTTP API + write:repository スコープのトークンで行う。
+# HTTP API + write:repository,write:user スコープのトークンで行う。
+# リポジトリ作成 (POST /api/v1/user/repos) は user 名前空間の操作のため
+# write:repository だけでは 403
+# "token does not have at least one of required scope(s): [write:user]"
+# になる (実際に発生)。write:repository は作成後のブランチ保護等
+# (POST /api/v1/repos/...) に必要。
 # 同じトークンを owl-control.sh deploy-poll (§4.2) にも使い回すため、ホストへ
 # 標準出力経由で引き渡す (08-vm-provision.sh が DEPLOY_POLL_TOKEN= 行を捕捉して
 # /etc/owlv/forgejo_token へ書き込む)。
@@ -337,7 +342,7 @@ _log "ボットトークンを発行"
 # 拒否される (リポジトリ作成APIの 400 の真因はこれだった)。トークンは常に
 # 出力の最終行なので tail -n1 で確実に取り出す。
 BOT_TOKEN=$(su -m git -c "forgejo admin user generate-access-token \
-	--username ${FORGEJO_ADMIN_USER} --token-name 'owlv-bot-$(date +%s)' --scopes write:repository --raw \
+	--username ${FORGEJO_ADMIN_USER} --token-name 'owlv-bot-$(date +%s)' --scopes write:repository,write:user --raw \
 	--config ${FORGEJO_DATA}/custom/conf/app.ini" | tail -n1) ||
 	_die "ボットトークンの発行に失敗しました"
 [ -n "$BOT_TOKEN" ] || _die "ボットトークンが空でした"
