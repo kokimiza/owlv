@@ -65,6 +65,18 @@ git clone ssh://owlv-git/owlv-admin/owlv.git
 git remote set-url origin ssh://owlv-git/owlv-admin/owlv.git
 ```
 
+### ブランチ運用(`feat-*`/`hotfix-*` → `dev` → `main`)
+
+`main`・`dev` ともに直接 push 禁止(ブランチ保護)。開発者は `feat-<topic>` または `hotfix-<topic>` ブランチで作業し、**`dev` 宛**の PR を出す(`main` 宛 PR は開発責任者のみが `dev` から出すものなので、開発者が直接 `main` 宛 PR を作ることはない)。
+
+```sh
+git checkout -b feat-some-topic dev
+git push -u origin feat-some-topic
+# Forgejo Web UI で dev 宛の PR を作成
+```
+
+開発責任者が PR を Approve すると `dev` に取り込まれる。`dev` → `main` への統合(リリース)は開発責任者が定期的に PR を出し、CI 通過を確認してマージする(§3.3, [doc/dev_sec_ops.md](doc/dev_sec_ops.md))。`main` 宛 PR の差出元が `dev` 以外だと CI が失敗するようになっている([infra/vm-git/build.yml](infra/vm-git/build.yml) の「main宛PRのソースブランチ検証」ステップ)。
+
 退会させる場合は `infra/host/conf/git-jump-keys/<username>.pub` を消してコミットし、責任者がホスト上で `dev-join.sh sync`（または `dev-join.sh <username> --remove`）を実行するだけでよい。
 
 ## 2. Pompadour bot（ChatOps）
