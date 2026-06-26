@@ -85,6 +85,19 @@ FCIS は「純粋か副作用ありか」という1本の境界線でレイヤ�
 
 凡例: ○=設計通り実装済み / △=部分実装または差異あり / ×=未実装。§1.3 の ECC メモリ要件、§2.3 の鍵エスクロー(オフライン保管・金庫・遠隔地封緘)はハードウェア調達・物理運用手順であり、コード化の対象外として本表から除外した。
 
+## 運用ユーザーのアクセス方法
+
+`owl-operators` / `owl-maintainers` グループに登録された運用ユーザーは、ホストを経由せず AP VM へ直接 SSH する（[infra/host/conf/pf.conf](infra/host/conf/pf.conf) でクライアント→AP VM の通信のみ許可）。
+
+```bash
+ssh -p 8022 <username>@<AP_VM_の到達可能IP>
+```
+
+- `owl-operators`：接続すると `ForceCommand` により owlv（TUI）が即時起動する。シェルには一切到達できない。`exit`/`q` で owlv を終了すると SSH セッションも切断される（[infra/vm-ap/setup.sh](infra/vm-ap/setup.sh) の `owl-session` ラッパー参照）。
+- `owl-maintainers`：通常の ksh シェルでログインできる参照専用の保守者。ポート転送・doas による昇格はできない。
+
+ポート番号は [infra/owl-config.toml](infra/owl-config.toml) の `[app].ssh_port`（既定 `8022`）に従う。ユーザーの追加・無効化はアプリ内のユーザーマスタ（`Core.Domain.User`）からの `owl-user-sync` 経由で行われ、OS アカウントを手動で作成する運用ではない。
+
 ## 開発環境
 
 本番は OpenBSD VM + PostgreSQL（RLS有効）だが、開発時は Docker Compose で素の PostgreSQL を使う。
@@ -108,16 +121,3 @@ hlint app src test
 ```
 
 `Core/` のテストはインフラ不要で CI 実行対象。`Shell/` の動作確認（PostgreSQL 永続化・TUI 描画）は手動確認のみで、cabal のテストスイートには含めない方針（[CLAUDE.md](CLAUDE.md) 参照）。
-
-## ディレクトリ構成
-
-```
-app/        実行バイナリ owlv のエントリポイント（配線のみ）
-batch/      バッチ実行バイナリ owlv-batch-center（daily-close / wal-ship / vacuum-check）
-projector/  リードモデル転写バイナリ owlv-projector（run / rebuild）
-src/Core/   純粋ドメインロジック（コマンド・イベント・decide・evolve・読みモデル）
-src/Shell/  PostgreSQL イベントストア・SQLite リードモデル・effectful インタープリタ・brick TUI・ユースケース相当の orchestration
-test/Core/  ドメインロジックの property test / unit test
-infra/      本番運用基盤（OpenBSD VM・プロビジョニング・DR）のコード化された構成
-doc/        会計仕様（ifrs_standard.md）・運用定義書（dev_sec_ops.md）・各種仕様書
-```
