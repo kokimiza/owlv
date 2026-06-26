@@ -10,11 +10,13 @@ CLAUDE.mdの「app/Main.hs は config・wiring・startup のみ」という方�
 -}
 module Main (main) where
 
+import Control.Concurrent (threadDelay)
 import Control.Exception (SomeException, try)
 import Control.Monad (forever, void)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.Map.Strict (Map)
 import Data.Text (Text)
+import Data.Time.Clock (NominalDiffTime, diffUTCTime, getCurrentTime)
 import Options.Applicative
 import System.Directory (removeFile)
 import System.Exit (ExitCode (..), exitFailure, exitWith)
@@ -99,21 +101,67 @@ reportError ctx err = hPutStrLn stderr (ctx <> ": " <> show err)
 -- run: 常駐デーモン
 -- ─────────────────────────────────────────────────────────────
 
+-- | 再接続バックオフの初期値・上限（doc/cqrs.md §3.1 のSPOF対策）。
+baseReconnectDelayMicros, maxReconnectDelayMicros :: Int
+baseReconnectDelayMicros = 1 * 1000 * 1000
+maxReconnectDelayMicros = 5 * 1000 * 1000
+
+-- | 接続が一定時間以上持続したら「安定接続」とみなしバックオフをリセットする。
+stableConnectionSeconds :: NominalDiffTime
+stableConnectionSeconds = 30
+
 runDaemon :: IO ()
 runDaemon = do
+  cacheRef <- newIORef Map.empty
+  runWithReconnect cacheRef baseReconnectDelayMicros
+
+{- | 接続して常駐ループを実行する。ループ本体が例外で落ちたら
+（PG接続断など）、古い read-model ハンドルを捨てて指数バックオフの後に
+再接続する。安定して動いていた接続が落ちた場合はバックオフを初期値に戻す。
+1テナント単位の失敗は 'sweepOne' が既に吸収しているので、ここで捕まえるのは
+「共有 PG.Connection 自体が壊れた」場合だけ。
+-}
+runWithReconnect :: IORef (Map ReadModelTarget ReadModel) -> Int -> IO ()
+runWithReconnect cacheRef delayMicros = do
   connResult <- connectDb
   case connResult of
-    Left err -> die99 err
+    Left err -> do
+      reportError "PostgreSQL接続失敗、再試行します" err
+      threadDelay delayMicros
+      runWithReconnect cacheRef (nextDelay delayMicros)
     Right conn -> do
-      _ <- PG.execute_ conn "LISTEN owlv_events"
-      cacheRef <- newIORef Map.empty
-      forever $ do
-        sweepAll conn cacheRef
-        -- 通知を待つが、最大 pollIntervalMicros で必ず諦めて次サイクルへ進む。
-        -- (Maybe Notification の中身は使わない — payload を見て対象を絞る
-        -- 最適化はせず、毎サイクル全Tenant + Identityを素直に掃く。
-        -- doc/cqrs.md §5.4 のKPIビューと同じ「再計算すれば必ず合う」方針)
-        void (timeout pollIntervalMicros (PGN.getNotification conn))
+      startedAt <- getCurrentTime
+      outcome <- try @SomeException (daemonLoop conn cacheRef)
+      PG.close conn
+      clearCache cacheRef
+      case outcome of
+        Left ex -> hPutStrLn stderr ("常駐ループ例外、再接続します: " <> show ex)
+        Right () -> pure ()
+      finishedAt <- getCurrentTime
+      let ranLongEnough = diffUTCTime finishedAt startedAt >= stableConnectionSeconds
+          delayMicros' = if ranLongEnough then baseReconnectDelayMicros else nextDelay delayMicros
+      threadDelay delayMicros'
+      runWithReconnect cacheRef delayMicros'
+
+nextDelay :: Int -> Int
+nextDelay d = min maxReconnectDelayMicros (d * 2)
+
+clearCache :: IORef (Map ReadModelTarget ReadModel) -> IO ()
+clearCache cacheRef = do
+  cache <- readIORef cacheRef
+  mapM_ closeReadModel (Map.elems cache)
+  modifyIORef' cacheRef (const Map.empty)
+
+daemonLoop :: PG.Connection -> IORef (Map ReadModelTarget ReadModel) -> IO ()
+daemonLoop conn cacheRef = do
+  _ <- PG.execute_ conn "LISTEN owlv_events"
+  forever $ do
+    sweepAll conn cacheRef
+    -- 通知を待つが、最大 pollIntervalMicros で必ず諦めて次サイクルへ進む。
+    -- (Maybe Notification の中身は使わない — payload を見て対象を絞る
+    -- 最適化はせず、毎サイクル全Tenant + Identityを素直に掃く。
+    -- doc/cqrs.md §5.4 のKPIビューと同じ「再計算すれば必ず合う」方針)
+    void (timeout pollIntervalMicros (PGN.getNotification conn))
 
 sweepAll :: PG.Connection -> IORef (Map ReadModelTarget ReadModel) -> IO ()
 sweepAll conn cacheRef = do
