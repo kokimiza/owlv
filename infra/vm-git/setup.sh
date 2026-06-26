@@ -434,6 +434,11 @@ if [ -n "$_WORKFLOW_FILES" ]; then
 				commit -q -m 'ci: add/update workflows'
 			git -c "http.extraHeader=Authorization: Basic ${GIT_BASIC_AUTH}" push -q origin HEAD:main
 		fi
+		# dev ブランチを main と同じコミットから作成する (まだ存在しなければ)。
+		# ブランチ保護の設定対象として実体が必要なため、ブランチ保護を入れる前に
+		# ここで用意する。開発者は feat-*/hotfix-* → dev → main の二段運用。
+		git -c "http.extraHeader=Authorization: Basic ${GIT_BASIC_AUTH}" \
+			push -q origin HEAD:refs/heads/dev 2>&1 | grep -v '^$' || true
 	) || _die "workflow の反映に失敗しました"
 	rm -rf "$WORK"
 	_ok "workflow 反映 (${_WORKFLOW_FILES# })"
@@ -441,15 +446,31 @@ else
 	_info "警告: ${SCRIPT_DIR}/build.yml が見つかりません。手動で追加してください"
 fi
 
-# ブランチ保護 (main への直接 push 禁止 / 最低1 Approve 必須、doc/dev_sec_ops.md §3.3)
-_log "ブランチ保護を設定"
+# ブランチ保護 (doc/dev_sec_ops.md §3.3、2026年6月: dev/main 二段ゲート化)
+# 開発者は feat-*/hotfix-* のみ push でき、dev への PR を出す。開発責任者が
+# それを承認(required_approvals:1)してから、開発責任者自身が dev→main の PR を
+# 出し、CI(enable_status_check)が通った時点で責任者がマージする。
+# 注意: Forgejo の branch_protections API は「PR の差出元ブランチ」を制約する
+# 機能を持たない (push 可否・approve数・マージ実行者しか制御できない) ため、
+# 「main 宛 PR は dev からのみ」は build.yml 側のチェック(下記)と
+# merge_whitelist (実行できるのは責任者のみ) の組み合わせで強制する。
+_log "ブランチ保護を設定 (main)"
 curl -fsS -X POST \
 	-H "Authorization: token ${BOT_TOKEN}" \
 	-H "Content-Type: application/json" \
-	-d '{"branch_name":"main","enable_push":false,"required_approvals":1,"enable_status_check":true}' \
+	-d "{\"branch_name\":\"main\",\"enable_push\":false,\"required_approvals\":0,\"enable_status_check\":true,\"enable_merge_whitelist\":true,\"merge_whitelist_usernames\":[\"${FORGEJO_ADMIN_USER}\"]}" \
 	"${API}/repos/${FORGEJO_ADMIN_USER}/owlv/branch_protections" >/dev/null 2>&1 ||
-	_info "ブランチ保護は既存のためスキップ (失敗時は要手動確認)"
-_ok "ブランチ保護"
+	_info "ブランチ保護(main)は既存のためスキップ (失敗時は要手動確認)"
+_ok "ブランチ保護 (main)"
+
+_log "ブランチ保護を設定 (dev)"
+curl -fsS -X POST \
+	-H "Authorization: token ${BOT_TOKEN}" \
+	-H "Content-Type: application/json" \
+	-d '{"branch_name":"dev","enable_push":false,"required_approvals":1,"enable_status_check":true}' \
+	"${API}/repos/${FORGEJO_ADMIN_USER}/owlv/branch_protections" >/dev/null 2>&1 ||
+	_info "ブランチ保護(dev)は既存のためスキップ (失敗時は要手動確認)"
+_ok "ブランチ保護 (dev)"
 
 _log "Git VM セットアップ完了"
 echo ""

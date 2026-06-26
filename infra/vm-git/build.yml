@@ -1,7 +1,14 @@
 # CI/CD パイプライン (doc/dev_sec_ops.md §3.2 / §4.1 / §4.2)
 #
-# - PR (opened/synchronize/reopened): Sec(HLint) → Dev(build/test) のみ実行する。
-#   結果は Forgejo Web UI 上で管理者の Approve 判断材料になる(§3.3)。
+# ブランチ運用 (2026年6月導入): feat-*/hotfix-* → dev → main の二段ゲート。
+# 開発者は feat-*/hotfix-* のみ push し、dev への PR を出す。開発責任者がそれを
+# 承認(dev は required_approvals:1)してから、開発責任者自身が dev→main の PR を
+# 出してマージする(main は merge_whitelist で責任者のみ実行可)。main 宛 PR の
+# 差出元が dev であることは下記 "main宛PRのソースブランチ検証" ステップで強制する
+# (branch_protections API には差出元ブランチを制約する機能が無いため)。
+#
+# - PR (opened/synchronize/reopened, 宛先 main/dev 共通): Sec(HLint) → Dev(build/test)
+#   のみ実行する。結果は Forgejo Web UI 上で開発責任者の Approve 判断材料になる(§3.3)。
 # - main への merge (= 承認済み PR が統合された push): 同じ Sec/Dev を再実行した
 #   うえで、タグ付与・リリースビルド・manifest.txt(未署名)添付までを自動実行する。
 #   リリースは draft=true で作成する — manifest.txt への signify 署名は
@@ -22,7 +29,7 @@ name: build
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, dev]
     types: [opened, synchronize, reopened]
   push:
     branches: [main]
@@ -31,6 +38,15 @@ jobs:
   build:
     runs-on: [openbsd, haskell]
     steps:
+      # main 宛 PR は dev からのみ許可する (feat-*/hotfix-* から直接 main への
+      # PR を防ぐ最終ゲート)。branch_protections API には PR の差出元ブランチを
+      # 制約する機能が無いため、ここで明示的に検証する。
+      - name: main宛PRのソースブランチ検証
+        if: ${{ forgejo.event_name == 'pull_request' && forgejo.base_ref == 'main' && forgejo.head_ref != 'dev' }}
+        run: |
+          echo "main へのPRは dev からのみ許可されています (差出元: ${{ forgejo.head_ref }})" >&2
+          exit 1
+
       - name: checkout
         run: |
           set -eu
