@@ -32,7 +32,7 @@
 #      鍵とは別物。使い回さない):
 #        ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_gitjump -C "<username>-gitjump"
 #      username は OpenBSD useradd の制約に合わせて英小文字始まり/英小文字・
-#      数字・-・_ のみ (下記 case 文参照)。既存の管理者ログイン名と一致させる
+#      数字・_ のみ (- は使わない、下記 case 文参照)。既存の管理者ログイン名と一致させる
 #      必要はない。パスフレーズは自分の好きなものを設定してよい (これは
 #      秘密鍵をローカルで保護するためだけのもので、ホスト側には関係ない)。
 #   2. 生成した ~/.ssh/id_ed25519_gitjump.pub を、ローカルの開発リポジトリの
@@ -144,11 +144,11 @@ ARG2="${2:-}"
 [ -n "$USERNAME" ] && [ -n "$ARG2" ] ||
 	_die "使い方: dev-join.sh <username> <pubkey-file> | dev-join.sh <username> --remove | dev-join.sh sync"
 
-# OpenBSD useradd のユーザー名制約 (英小文字/数字/-/_ 、先頭は英小文字か _) を
+# ユーザー名制約 (英小文字/数字/_ のみ、先頭は英小文字か _、- は使わない) を
 # 軽く事前検証する。OS コマンドへそのまま渡す変数なので形式を絞っておく。
 case "$USERNAME" in
-[a-z_][a-z0-9_-]*) ;;
-*) _die "username は英小文字で始まり、英小文字/数字/-/_ のみで構成してください: ${USERNAME}" ;;
+[a-z_][a-z0-9_]*) ;;
+*) _die "username は英小文字で始まり、英小文字/数字/_ のみで構成してください(- は使用不可): ${USERNAME}" ;;
 esac
 
 if [ "$ARG2" = "--remove" ]; then

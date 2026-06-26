@@ -42,13 +42,20 @@ import Core.Domain.Project (ProjectId, ProjectPhaseId)
 (doc/project_management.md §8 残課題)。
 -}
 data ExpenseNature
-  = ExpenseSubcontractCost -- ^ 外注費
-  | ExpenseMaterialCost -- ^ 材料費
-  | ExpenseLaborCost -- ^ 労務費（doc/labor_management.md 起因）
-  | ExpenseTravel -- ^ 旅費交通費
-  | ExpenseLicenseFee -- ^ ライセンス・権利使用料
-  | ExpenseConsumables -- ^ 消耗品費
-  | ExpenseOther Text -- ^ 上記に当たらない場合の説明書き
+  = -- | 外注費
+    ExpenseSubcontractCost
+  | -- | 材料費
+    ExpenseMaterialCost
+  | -- | 労務費（doc/labor_management.md 起因）
+    ExpenseLaborCost
+  | -- | 旅費交通費
+    ExpenseTravel
+  | -- | ライセンス・権利使用料
+    ExpenseLicenseFee
+  | -- | 消耗品費
+    ExpenseConsumables
+  | -- | 上記に当たらない場合の説明書き
+    ExpenseOther Text
   deriving (Eq, Show)
 
 instance ToJSON ExpenseNature where
@@ -76,9 +83,12 @@ instance FromJSON ExpenseNature where
 
 -- | 収益の性質分類 (doc/project_management.md §1.4)
 data RevenueNature
-  = RevenueGoodsSale -- ^ グッズ販売等の有形即時売上
-  | RevenueLicenseSettlement -- ^ ライセンス決済等の無形即時売上
-  | RevenueLongTermContract -- ^ 進行基準 (IFRS 15) に基づく長期契約売上
+  = -- | グッズ販売等の有形即時売上
+    RevenueGoodsSale
+  | -- | ライセンス決済等の無形即時売上
+    RevenueLicenseSettlement
+  | -- | 進行基準 (IFRS 15) に基づく長期契約売上
+    RevenueLongTermContract
   deriving (Bounded, Enum, Eq, Generic, Show)
 
 instance ToJSON RevenueNature
@@ -156,8 +166,9 @@ data SingleTransaction = SingleTransaction
   , stxAmount :: Money
   , stxDate :: Day
   , stxTaxTreatment :: Text
-  -- ^ 消費税区分等の自由記述。専用の型は将来 Core.Domain.Tax 拡張時に検討する
-  -- (doc/management_accounting.md §6 残課題)。
+  {- ^ 消費税区分等の自由記述。専用の型は将来 Core.Domain.Tax 拡張時に検討する
+  (doc/management_accounting.md §6 残課題)。
+  -}
   }
   deriving (Eq, Generic, Show)
 

@@ -45,7 +45,12 @@ import Core.Domain.AccountingPeriod (AccountingPeriodId, PeriodStatus)
 import Core.Domain.CashTransaction (CashTransaction, CashTransactionId)
 import Core.Domain.Ecl (EclMeasurement, EclMeasurementId)
 import Core.Domain.EmployeeBenefit (BenefitLiability, BenefitLiabilityId)
-import Core.Domain.ExternalOrder (ExternalOrder, ExternalOrderId, SingleTransaction, SingleTransactionId)
+import Core.Domain.ExternalOrder
+  ( ExternalOrder
+  , ExternalOrderId
+  , SingleTransaction
+  , SingleTransactionId
+  )
 import Core.Domain.FixedAsset (ComponentId, FixedAsset, FixedAssetId)
 import Core.Domain.FxRate (FxRate, FxRateId)
 import Core.Domain.Journal (JournalEntry, JournalEntryId)
@@ -62,7 +67,12 @@ import Core.Domain.SubAccount (SubAccount, SubAccountId)
 import Core.Domain.Tax (TaxEntry, TaxEntryId)
 import Core.Domain.Tenant (Tenant)
 import Core.Domain.User (OsUid, User, UserId, firstOsUid)
-import Core.Domain.WorkAssignment (TimesheetEntry, TimesheetEntryId, WorkAssignment, WorkAssignmentId)
+import Core.Domain.WorkAssignment
+  ( TimesheetEntry
+  , TimesheetEntryId
+  , WorkAssignment
+  , WorkAssignmentId
+  )
 
 newtype JournalBook = JournalBook
   { journalEntries :: Map JournalEntryId JournalEntry

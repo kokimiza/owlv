@@ -35,8 +35,9 @@ import Core.Domain.Personnel (PersonnelId)
 import Core.Domain.Project (ProjectId, ProjectPhaseId)
 import Core.Domain.User (UserId)
 
--- | コンストラクタは型名を冠する (doc/project_management.md の ProjectStatus
--- / doc/labor_management.md の PersonnelStatus と同じ理由)。
+{- | コンストラクタは型名を冠する (doc/project_management.md の ProjectStatus
+/ doc/labor_management.md の PersonnelStatus と同じ理由)。
+-}
 data WorkAssignmentStatus
   = WorkAssignmentStatusAssigned
   | WorkAssignmentStatusInProgress

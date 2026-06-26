@@ -39,17 +39,22 @@ import Core.Domain.User (UserId)
 
 -- | doc/labor_management.md §1.1
 data EmploymentType
-  = EmploymentFullTime -- ^ 正社員 (IAS19、既存 Core.Domain.EmployeeBenefit と直結)
-  | EmploymentFixedTerm -- ^ 契約社員
-  | EmploymentContractor -- ^ 業務委託・外注（個人）
-  | EmploymentCorporateVendor -- ^ 外注（法人）
+  = -- | 正社員 (IAS19、既存 Core.Domain.EmployeeBenefit と直結)
+    EmploymentFullTime
+  | -- | 契約社員
+    EmploymentFixedTerm
+  | -- | 業務委託・外注（個人）
+    EmploymentContractor
+  | -- | 外注（法人）
+    EmploymentCorporateVendor
   deriving (Bounded, Enum, Eq, Generic, Show)
 
 instance ToJSON EmploymentType
 instance FromJSON EmploymentType
 
--- | コンストラクタは型名を冠する — `Core.Domain.User.UserStatus` の
--- `Active`/`Suspended` と衝突しないようにするため。
+{- | コンストラクタは型名を冠する — `Core.Domain.User.UserStatus` の
+`Active`/`Suspended` と衝突しないようにするため。
+-}
 data PersonnelStatus
   = PersonnelStatusActive
   | PersonnelStatusSuspended
@@ -77,8 +82,9 @@ data Personnel = Personnel
   , personnelName :: Text
   , personnelEmploymentType :: EmploymentType
   , personnelPartnerRef :: Maybe PartnerId
-  -- ^ `EmploymentContractor`/`EmploymentCorporateVendor` の場合、
-  -- 既存 Core.Domain.Partner への参照
+  {- ^ `EmploymentContractor`/`EmploymentCorporateVendor` の場合、
+  既存 Core.Domain.Partner への参照
+  -}
   , personnelUserRef :: Maybe UserId
   -- ^ §0.1 の弱い関連。owlv にログインする人物の場合のみ Just
   , personnelStatus :: PersonnelStatus
@@ -92,8 +98,10 @@ instance FromJSON Personnel
 data PayBasis
   = PayMonthlySalary Money
   | PayDailyRate Money
-  | PayPieceRate Money -- ^ 件当たり（背景1枚いくら、等）
-  | PayRevenueShare Decimal -- ^ 売上分配率（0以上1以下、ライセンス収益の分配等）
+  | -- | 件当たり（背景1枚いくら、等）
+    PayPieceRate Money
+  | -- | 売上分配率（0以上1以下、ライセンス収益の分配等）
+    PayRevenueShare Decimal
   deriving (Eq, Show)
 
 instance ToJSON PayBasis where

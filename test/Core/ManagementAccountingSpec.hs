@@ -1,17 +1,21 @@
 module Core.ManagementAccountingSpec (tests) where
 
-import Test.Tasty
-import Test.Tasty.HUnit
-
 import Data.List (foldl')
 import Data.Time (Day, UTCTime (..), fromGregorian, secondsToDiffTime)
+import Test.Tasty
+import Test.Tasty.HUnit
 
 import Data.Map.Strict qualified as Map
 import Data.UUID qualified as UUID
 
 import Core.Command (Command (..))
 import Core.Decide (decide)
-import Core.Domain.ExternalOrder (ExpenseNature (..), ExternalOrder (..), ExternalOrderId (..), OrderStatus (..))
+import Core.Domain.ExternalOrder
+  ( ExpenseNature (..)
+  , ExternalOrder (..)
+  , ExternalOrderId (..)
+  , OrderStatus (..)
+  )
 import Core.Domain.ManagementAccounting
   ( AlertSeverity (..)
   , BudgetAlert (..)
@@ -111,8 +115,9 @@ baseBook =
 testThresholdId :: KpiThresholdId
 testThresholdId = KpiThresholdId (mkUUID 3)
 
--- | 予算消化率85%警告/100%重大、Project全体スコープ
--- (ユーザー提示例: 「85%消化で予算アラート」)。
+{- | 予算消化率85%警告/100%重大、Project全体スコープ
+(ユーザー提示例: 「85%消化で予算アラート」)。
+-}
 testThreshold :: KpiThreshold
 testThreshold =
   KpiThreshold
@@ -191,18 +196,25 @@ bookAtConsumption total =
 evaluateTests :: [TestTree]
 evaluateTests =
   [ testCase "閾値未達ならイベントを発生させない" $
-      decide (bookAtConsumption 700000) (EvaluateBudgetConsumption testAlertId testProjectId Nothing testNow (Just testOrderId))
+      decide
+        (bookAtConsumption 700000)
+        (EvaluateBudgetConsumption testAlertId testProjectId Nothing testNow (Just testOrderId))
         @?= Right []
   , testCase "warn閾値（80%）以上・critical未満ならAlertWarning" $
-      case decide (bookAtConsumption 800000) (EvaluateBudgetConsumption testAlertId testProjectId Nothing testNow (Just testOrderId)) of
+      case decide
+        (bookAtConsumption 800000)
+        (EvaluateBudgetConsumption testAlertId testProjectId Nothing testNow (Just testOrderId)) of
         Right [BudgetThresholdBreached alert] -> baSeverity alert @?= AlertWarning
         other -> assertFailure ("expected single AlertWarning BudgetThresholdBreached, got: " <> show other)
   , testCase "critical閾値（100%）以上ならAlertCritical" $
-      case decide (bookAtConsumption 1000000) (EvaluateBudgetConsumption testAlertId testProjectId Nothing testNow (Just testOrderId)) of
+      case decide
+        (bookAtConsumption 1000000)
+        (EvaluateBudgetConsumption testAlertId testProjectId Nothing testNow (Just testOrderId)) of
         Right [BudgetThresholdBreached alert] -> baSeverity alert @?= AlertCritical
         other -> assertFailure ("expected single AlertCritical BudgetThresholdBreached, got: " <> show other)
   , testCase "対象スコープに有効な閾値が無ければイベントを発生させない" $
-      decide (foldl' evolve baseBook [ExternalOrderPlaced (orderWithTotal 1000000)])
+      decide
+        (foldl' evolve baseBook [ExternalOrderPlaced (orderWithTotal 1000000)])
         (EvaluateBudgetConsumption testAlertId testProjectId Nothing testNow (Just testOrderId))
         @?= Right []
   , testCase "予算がゼロのProjectはゼロ除算を起こさずイベントを発生させない" $
@@ -212,9 +224,11 @@ evaluateTests =
           orgOnlyBook = evolve initialAppBook (OrganisationRegistered (Organisation testOrg "Org One" Nothing True))
           book = foldl' evolve orgOnlyBook [ProjectOpened zeroBudgetProject, KpiThresholdSet zeroBudgetThreshold]
       in decide book (EvaluateBudgetConsumption testAlertId zeroBudgetProjectId Nothing testNow Nothing)
-          @?= Right []
+           @?= Right []
   , testCase "存在しないProjectの評価はProjectNotFound" $
-      case decide bookWithThreshold (EvaluateBudgetConsumption testAlertId (ProjectId (mkUUID 999)) Nothing testNow Nothing) of
+      case decide
+        bookWithThreshold
+        (EvaluateBudgetConsumption testAlertId (ProjectId (mkUUID 999)) Nothing testNow Nothing) of
         Left (ProjectNotFound _) -> pure ()
         other -> assertFailure ("expected ProjectNotFound, got: " <> show other)
   ]
@@ -229,7 +243,7 @@ evolveTests =
   , testCase "KpiThresholdRetired後にktRetiredがTrueになる" $
       let book = evolve bookWithThreshold (KpiThresholdRetired testThresholdId)
       in fmap ktRetired (Map.lookup testThresholdId (kpiThresholds (appManagementAccounting book)))
-          @?= Just True
+           @?= Just True
   , testCase "BudgetThresholdBreached後にアラートが読み取れる" $
       let alert =
             BudgetAlert

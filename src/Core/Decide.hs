@@ -18,7 +18,12 @@ import Core.Domain.AccountingPeriod (periodIdOf)
 import Core.Domain.CashTransaction (CashTransaction (..))
 import Core.Domain.Ecl (EclMeasurement (..))
 import Core.Domain.EmployeeBenefit (BenefitLiability (..))
-import Core.Domain.ExternalOrder (ExternalOrder (..), ExternalOrderId, OrderStatus (..), SingleTransaction (..))
+import Core.Domain.ExternalOrder
+  ( ExternalOrder (..)
+  , ExternalOrderId
+  , OrderStatus (..)
+  , SingleTransaction (..)
+  )
 import Core.Domain.FixedAsset
   ( ComponentId (..)
   , FixedAsset (..)
@@ -50,7 +55,14 @@ import Core.Domain.OrgPermission (PermScope (..))
 import Core.Domain.Organisation (Organisation (..), OrganisationId (..))
 import Core.Domain.Partner (Partner (..), PartnerId (..))
 import Core.Domain.Personnel (ContractTerm (..), Personnel (..), PersonnelId, PersonnelStatus (..))
-import Core.Domain.Project (Project (..), ProjectId, ProjectLifecycle (..), ProjectPhase (..), ProjectPhaseId, ProjectStatus (..))
+import Core.Domain.Project
+  ( Project (..)
+  , ProjectId
+  , ProjectLifecycle (..)
+  , ProjectPhase (..)
+  , ProjectPhaseId
+  , ProjectStatus (..)
+  )
 import Core.Domain.Reconciliation
   ( Reconciliation (..)
   , ReconciliationItem (..)
@@ -69,7 +81,12 @@ import Core.Domain.User
   , mkSshPubKey
   , mkUserId
   )
-import Core.Domain.WorkAssignment (TimesheetEntry (..), WorkAssignment (..), WorkAssignmentId, WorkAssignmentStatus (..))
+import Core.Domain.WorkAssignment
+  ( TimesheetEntry (..)
+  , WorkAssignment (..)
+  , WorkAssignmentId
+  , WorkAssignmentStatus (..)
+  )
 import Core.Error (DomainError (..))
 import Core.Event (Event (..))
 import Core.State
@@ -784,8 +801,9 @@ lookupProject pb pid = case Map.lookup pid (projects pb) of
   Nothing -> Left (ProjectNotFound pid)
   Just pa -> Right pa
 
--- | 全Projectを線形探索して発注を見つける。プロジェクト数のオーダーは
--- 小さいことを前提とする (doc/project_management.md の運用規模を想定)。
+{- | 全Projectを線形探索して発注を見つける。プロジェクト数のオーダーは
+小さいことを前提とする (doc/project_management.md の運用規模を想定)。
+-}
 lookupOrder :: ProjectBook -> ExternalOrderId -> Either DomainError (ProjectId, ExternalOrder)
 lookupOrder pb oid =
   case [(pid, o) | (pid, pa) <- Map.toList (projects pb), Just o <- [Map.lookup oid (paOrders pa)]] of
@@ -811,9 +829,10 @@ checkOrderModifiable :: ExternalOrderId -> OrderStatus -> Either DomainError ()
 checkOrderModifiable oid st =
   check (st == OrderDelivered || st == OrderCancelled) (ExternalOrderAlreadyFinalized oid)
 
--- | 指定スコープ（Phase 指定時はその Phase のみ、未指定なら Project 全体）の
--- 約定額(committed)・確定額(incurred)・予算(budget)を算出する
--- (doc/project_management.md §2.3, doc/management_accounting.md §0.2)。
+{- | 指定スコープ（Phase 指定時はその Phase のみ、未指定なら Project 全体）の
+約定額(committed)・確定額(incurred)・予算(budget)を算出する
+(doc/project_management.md §2.3, doc/management_accounting.md §0.2)。
+-}
 consumptionFor :: ProjectAggregate -> Maybe ProjectPhaseId -> (Money, Money, Money)
 consumptionFor pa mPhase =
   let relevantOrders =
@@ -826,7 +845,8 @@ consumptionFor pa mPhase =
         foldl'
           addMoney
           zeroMoney
-          [moneyTimesInt (orderUnitPrice o) (orderQuantity o - orderDeliveredQuantity o) | o <- relevantOrders]
+          [ moneyTimesInt (orderUnitPrice o) (orderQuantity o - orderDeliveredQuantity o) | o <- relevantOrders
+          ]
       incurred =
         foldl'
           addMoney
@@ -840,8 +860,9 @@ consumptionFor pa mPhase =
 moneyTimesInt :: Money -> Int -> Money
 moneyTimesInt m n = mkMoney (unMoney m * fromIntegral n)
 
--- | 確定額が critical/warn のいずれの閾値を超えているかを判定する。
--- critical 閾値が無い、または超えていない場合は warn のみで判定する。
+{- | 確定額が critical/warn のいずれの閾値を超えているかを判定する。
+critical 閾値が無い、または超えていない場合は warn のみで判定する。
+-}
 alertSeverityFor :: Money -> Money -> Maybe Money -> Maybe AlertSeverity
 alertSeverityFor total warnAmount criticalAmount
   | maybe False (total >=) criticalAmount = Just AlertCritical
@@ -872,14 +893,12 @@ checkWorkAssignmentModifiable waid st =
 -}
 findActivePersonnelForVendor :: LaborBook -> PartnerId -> Day -> Maybe PersonnelId
 findActivePersonnelForVendor lb vendorPid day =
-  case
-    [ personnelId p
-    | p <- Map.elems (personnelRecords lb)
-    , personnelPartnerRef p == Just vendorPid
-    , personnelStatus p == PersonnelStatusActive
-    , hasActiveContract lb (personnelId p) day
-    ]
-  of
+  case [ personnelId p
+       | p <- Map.elems (personnelRecords lb)
+       , personnelPartnerRef p == Just vendorPid
+       , personnelStatus p == PersonnelStatusActive
+       , hasActiveContract lb (personnelId p) day
+       ] of
     (pid : _) -> Just pid
     [] -> Nothing
 

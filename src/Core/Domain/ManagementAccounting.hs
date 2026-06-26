@@ -38,9 +38,12 @@ import Core.Domain.Tenant (TenantId)
 
 -- | doc/management_accounting.md §1.2
 data KpiMetric
-  = KpiBudgetConsumptionRate -- ^ 予算消化率（ユーザー提示例: 85%で警告）
-  | KpiScheduleVariance -- ^ 予定工程に対する遅延率
-  | KpiGrossMarginRate -- ^ Project 単位の粗利率
+  = -- | 予算消化率（ユーザー提示例: 85%で警告）
+    KpiBudgetConsumptionRate
+  | -- | 予定工程に対する遅延率
+    KpiScheduleVariance
+  | -- | Project 単位の粗利率
+    KpiGrossMarginRate
   deriving (Bounded, Enum, Eq, Generic, Show)
 
 instance ToJSON KpiMetric
@@ -85,10 +88,13 @@ data KpiThreshold = KpiThreshold
   , ktTenant :: TenantId
   , ktMetric :: KpiMetric
   , ktScope :: KpiScope
-  , ktWarnAt :: Decimal -- ^ 例: 0.85
-  , ktCriticalAt :: Maybe Decimal -- ^ 例: 1.00（予算超過そのもの）
+  , ktWarnAt :: Decimal
+  -- ^ 例: 0.85
+  , ktCriticalAt :: Maybe Decimal
+  -- ^ 例: 1.00（予算超過そのもの）
   , ktEffectiveFrom :: Day
-  , ktRetired :: Bool -- ^ doc/management_accounting.md §2: 削除ではなく無効化フラグの追記
+  , ktRetired :: Bool
+  -- ^ doc/management_accounting.md §2: 削除ではなく無効化フラグの追記
   }
   deriving (Eq, Show)
 

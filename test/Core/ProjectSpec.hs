@@ -1,10 +1,9 @@
 module Core.ProjectSpec (tests) where
 
-import Test.Tasty
-import Test.Tasty.HUnit
-
 import Data.List (foldl')
 import Data.Time (Day, fromGregorian)
+import Test.Tasty
+import Test.Tasty.HUnit
 
 import Data.Map.Strict qualified as Map
 import Data.UUID qualified as UUID
@@ -286,7 +285,7 @@ evolveTests =
       let book = foldl' evolve bookWithOrder [ExternalOrderDeliveryConfirmed testOrderId testDay 3]
           order = Map.lookup testOrderId . paOrders =<< lookupProjectAgg book testProjectId
       in fmap (\o -> (orderDeliveredQuantity o, orderStatus o)) order
-          @?= Just (3, OrderPartiallyDelivered)
+           @?= Just (3, OrderPartiallyDelivered)
   , testCase "全数検収完了でOrderDeliveredになる" $
       let book = foldl' evolve bookWithOrder [ExternalOrderDeliveryConfirmed testOrderId testDay 5]
           order = Map.lookup testOrderId . paOrders =<< lookupProjectAgg book testProjectId
@@ -294,7 +293,7 @@ evolveTests =
   , testCase "ProjectClosed後にステータスがClosedになる" $
       let book = evolve bookWithProject (ProjectClosed testProjectId testDay)
       in fmap (projectStatus . paProject) (lookupProjectAgg book testProjectId)
-          @?= Just ProjectStatusClosed
+           @?= Just ProjectStatusClosed
   , testCase "fold は順序通りに決定的（同じイベント列は同じ結果を生む）" $
       let evts =
             [ ProjectOpened testProject

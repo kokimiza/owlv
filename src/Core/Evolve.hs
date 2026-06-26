@@ -11,7 +11,12 @@ import Core.Domain.AccountMaster (AccountMaster (..), SettlementBehavior (..))
 import Core.Domain.CashTransaction (CashTransaction (..))
 import Core.Domain.Ecl (EclMeasurement (..))
 import Core.Domain.EmployeeBenefit (BenefitLiability (..))
-import Core.Domain.ExternalOrder (ExternalOrder (..), ExternalOrderId, OrderStatus (..), SingleTransaction (..))
+import Core.Domain.ExternalOrder
+  ( ExternalOrder (..)
+  , ExternalOrderId
+  , OrderStatus (..)
+  , SingleTransaction (..)
+  )
 import Core.Domain.FixedAsset (ComponentId, FixedAsset (..), FixedAssetId)
 import Core.Domain.FxRate (FxRate (..))
 import Core.Domain.Journal (JournalEntry (..), JournalLine (..), entryId)

@@ -131,15 +131,17 @@ data Command
     ConfirmExternalOrderDelivery ExternalOrderId Day Int
   | -- | 対象発注, 理由
     CancelExternalOrder ExternalOrderId Text
-  | -- | doc/project_management.md §6: 即時単発取引。商品マスタを介さず
-    -- 極小のワークフロー(Project)として自動的に開いて閉じる。
+  | {- | doc/project_management.md §6: 即時単発取引。商品マスタを介さず
+    極小のワークフロー(Project)として自動的に開いて閉じる。
+    -}
     RecordSingleTransaction SingleTransaction OrganisationId TenantId
   | CloseProject ProjectId Day
   | -- 労務人事 (doc/labor_management.md §3) ────────────────────────────────
     RegisterPersonnel Personnel
   | RecordContractTerm ContractTerm
-  | -- | 新規WorkAssignmentId, 起因ExternalOrderId, 対象Project, 対象Phase,
-    -- 発注先PartnerId（Personnelの照合キー）, 割当日
+  | {- | 新規WorkAssignmentId, 起因ExternalOrderId, 対象Project, 対象Phase,
+    発注先PartnerId（Personnelの照合キー）, 割当日
+    -}
     CreateWorkAssignment WorkAssignmentId ExternalOrderId ProjectId (Maybe ProjectPhaseId) PartnerId Day
   | RecordTimesheetEntry TimesheetEntry
   | CompleteWorkAssignment WorkAssignmentId Day
@@ -149,7 +151,13 @@ data Command
   | -- 管理会計 (doc/management_accounting.md §2) ────────────────────────────
     SetKpiThreshold KpiThreshold
   | RetireKpiThreshold KpiThresholdId
-  | -- | 新規BudgetAlertId（しきい値超過時のみ使用、超過なしなら無視される）,
-    -- 対象Project, 対象Phase, 評価時刻, 起因ExternalOrder（任意）
-    EvaluateBudgetConsumption BudgetAlertId ProjectId (Maybe ProjectPhaseId) UTCTime (Maybe ExternalOrderId)
+  | {- | 新規BudgetAlertId（しきい値超過時のみ使用、超過なしなら無視される）,
+    対象Project, 対象Phase, 評価時刻, 起因ExternalOrder（任意）
+    -}
+    EvaluateBudgetConsumption
+      BudgetAlertId
+      ProjectId
+      (Maybe ProjectPhaseId)
+      UTCTime
+      (Maybe ExternalOrderId)
   deriving (Eq, Show)

@@ -1,17 +1,21 @@
 module Core.LaborSpec (tests) where
 
-import Test.Tasty
-import Test.Tasty.HUnit
-
 import Data.List (foldl')
 import Data.Time (Day, fromGregorian)
+import Test.Tasty
+import Test.Tasty.HUnit
 
 import Data.Map.Strict qualified as Map
 import Data.UUID qualified as UUID
 
 import Core.Command (Command (..))
 import Core.Decide (decide)
-import Core.Domain.ExternalOrder (ExpenseNature (..), ExternalOrder (..), ExternalOrderId (..), OrderStatus (..))
+import Core.Domain.ExternalOrder
+  ( ExpenseNature (..)
+  , ExternalOrder (..)
+  , ExternalOrderId (..)
+  , OrderStatus (..)
+  )
 import Core.Domain.Money (mkMoney)
 import Core.Domain.Organisation (Organisation (..), OrganisationId, mkOrganisationId)
 import Core.Domain.Partner (PartnerId (..))
@@ -212,20 +216,28 @@ contractTests =
 assignmentTests :: [TestTree]
 assignmentTests =
   [ testCase "稼働中Personnel・有効な契約条件があれば割当が成立する" $
-      case decide bookWithContract (CreateWorkAssignment testAssignmentId testOrderId testProjectId Nothing vendorPid testDay) of
+      case decide
+        bookWithContract
+        (CreateWorkAssignment testAssignmentId testOrderId testProjectId Nothing vendorPid testDay) of
         Right [WorkAssignmentCreated wa] -> waPersonnel wa @?= testPersonnelId
         other -> assertFailure ("expected single WorkAssignmentCreated, got: " <> show other)
   , testCase "対応するPersonnelが見つからない場合は照合失敗イベントを返す（DomainErrorにしない）" $
-      decide baseBook (CreateWorkAssignment testAssignmentId testOrderId testProjectId Nothing vendorPid testDay)
+      decide
+        baseBook
+        (CreateWorkAssignment testAssignmentId testOrderId testProjectId Nothing vendorPid testDay)
         @?= Right [PersonnelReconciliationFailed testOrderId "対応する稼働中のPersonnel、または有効な契約条件が見つかりません"]
   , testCase "契約条件の有効期間外であれば照合失敗になる" $
       let expiredTerm = testContractTerm{ctEffectiveTo = Just (fromGregorian 2025 12 31)}
           book = evolve bookWithPersonnel (ContractTermRecorded expiredTerm)
-      in case decide book (CreateWorkAssignment testAssignmentId testOrderId testProjectId Nothing vendorPid testDay) of
+      in case decide
+           book
+           (CreateWorkAssignment testAssignmentId testOrderId testProjectId Nothing vendorPid testDay) of
            Right [PersonnelReconciliationFailed oid _] -> oid @?= testOrderId
            other -> assertFailure ("expected PersonnelReconciliationFailed, got: " <> show other)
   , testCase "重複したWorkAssignmentIdはDuplicateWorkAssignmentId" $
-      case decide bookWithAssignment (CreateWorkAssignment testAssignmentId testOrderId testProjectId Nothing vendorPid testDay) of
+      case decide
+        bookWithAssignment
+        (CreateWorkAssignment testAssignmentId testOrderId testProjectId Nothing vendorPid testDay) of
         Left (DuplicateWorkAssignmentId _) -> pure ()
         other -> assertFailure ("expected DuplicateWorkAssignmentId, got: " <> show other)
   ]
@@ -299,7 +311,7 @@ evolveTests =
   , testCase "PersonnelSuspended後にステータスが変わる" $
       let book = evolve bookWithPersonnel (PersonnelSuspended testPersonnelId)
       in fmap personnelStatus (Map.lookup testPersonnelId (personnelRecords (appLabor book)))
-          @?= Just PersonnelStatusSuspended
+           @?= Just PersonnelStatusSuspended
   , testCase "PersonnelReconciliationFailed は読みモデルを変更しない" $
       let book = evolve baseBook (PersonnelReconciliationFailed testOrderId "no match")
       in appLabor book @?= appLabor baseBook
