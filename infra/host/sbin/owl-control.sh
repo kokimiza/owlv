@@ -1,6 +1,7 @@
 #!/bin/sh
 # owl-control.sh — owlv 運用制御スクリプト
-# §2.1: ベースバックアップ  §2.2: DR 射出  §3: デプロイ
+# §2.1: ベースバックアップ (DB pg_basebackup + Git VM forgejo dump)
+# §2.2: DR 射出  §2.4: forgejo dump を同一パイプラインに同梱  §3: デプロイ
 # 実行ユーザー: owl-control (cron) または wheel (手動)
 # doas ルール: /etc/doas.conf 参照
 set -eu
@@ -16,6 +17,9 @@ LOCKFILE=/tmp/owl-dr.lock
 LOGDIR=/var/log/owlv
 HOLD_FILE=/etc/owlv/INTEGRITY_HOLD
 DEPLOYED_LOG=/etc/owlv/deployed_tags
+# Git VM 上の app.ini パス (infra/vm-git/setup.sh の FORGEJO_DATA/custom/conf/app.ini
+# と一致させる)。forgejo dump は -c/--config で読む対象がこれ。
+FORGEJO_DUMP_CONF=/var/forgejo/custom/conf/app.ini
 
 # ── TOML 読み込み ───────────────────────────────────────────
 _toml() {
@@ -27,6 +31,7 @@ _toml() {
 
 DB_IP=$(_toml "network.internal_lan" "db_vm")
 AP_IP=$(_toml "network.internal_lan" "ap_vm")
+GIT_IP=$(_toml "network.dev_lan" "git_vm")
 RAMDISK=$(_toml "dr" "ramdisk_mount")
 AGE_PUB=$(_toml "dr" "age_pubkey_file")
 B2_REMOTE=$(_toml "dr" "b2_remote")
@@ -148,6 +153,18 @@ cmd_dr_export() {
 	cp /etc/owlv/infra/owl-config.toml "${WORK_DIR}/config/"
 	cp /etc/owlv/integrity-baseline.sha256 "${WORK_DIR}/config/" 2>/dev/null || true
 
+	# Git VM (Forgejo) からWAL相当のフルダンプ取得 (§2.1/§2.4: forgejo dump を
+	# 同一パイプラインに載せる要件)。リポジトリ本体・DB・カスタム設定・LFS/
+	# 添付/パッケージデータを含む。索引(bleve)とリポジトリアーカイブキャッシュは
+	# 再生成可能なため対象外にしてサイズを抑える。
+	_info "Git VM から Forgejo dump 取得"
+	install -d "${WORK_DIR}/forgejo"
+	_ssh "root@${GIT_IP}" \
+		"su -m git -c 'forgejo dump --config ${FORGEJO_DUMP_CONF} --file /tmp/forgejo-dump.zip --skip-index --skip-repo-archives --tempdir /tmp'" \
+		2>&1 | while read -r line; do _info "$line"; done
+	_scp -q "root@${GIT_IP}:/tmp/forgejo-dump.zip" "${WORK_DIR}/forgejo/"
+	_ssh "root@${GIT_IP}" "rm -f /tmp/forgejo-dump.zip"
+
 	# tar + age 暗号化
 	_info "圧縮・暗号化"
 	tar -czf - -C "$WORK_DIR" . |
@@ -199,6 +216,15 @@ cmd_basebackup() {
 	_scp -rq "root@${DB_IP}:/tmp/owl-bb/." "${DEST}/"
 	_ssh "root@${DB_IP}" "rm -rf /tmp/owl-bb"
 
+	# Git VM (Forgejo) の週次フルダンプ (§2.1/§2.4)。cmd_dr_export と同じ内容を
+	# ローカル保持側にも置く (DB の週次 pg_basebackup と対称にする)。
+	_info "Git VM から Forgejo dump 取得 → ${DEST}"
+	_ssh "root@${GIT_IP}" \
+		"su -m git -c 'forgejo dump --config ${FORGEJO_DUMP_CONF} --file /tmp/forgejo-dump.zip --skip-index --skip-repo-archives --tempdir /tmp'" \
+		2>&1 | while read -r line; do _info "$line"; done
+	_scp -q "root@${GIT_IP}:/tmp/forgejo-dump.zip" "${DEST}/"
+	_ssh "root@${GIT_IP}" "rm -f /tmp/forgejo-dump.zip"
+
 	# 30日超のバックアップを削除 (§2.1 保持ポリシー)
 	find /var/backup/owlv/basebackup/ -maxdepth 1 -type d -mtime +30 \
 		-exec rm -rf {} + 2>/dev/null || true
@@ -216,8 +242,6 @@ cmd_deploy() {
 	TAG="${1:-}"
 	[ -n "$TAG" ] || _die "タグを指定してください: deploy <vX.Y.Z>"
 	_log "デプロイ開始: ${TAG}"
-
-	GIT_IP=$(_toml "network.dev_lan" "git_vm")
 
 	# AP VM 上で 三重検証(signify 署名 / uname -r 一致 / SHA256 一致、§4.2)を
 	# 行ったうえでバージョン固有名に配置し、シンボリックリンクをアトミックに
@@ -322,7 +346,6 @@ cmd_sign_poll() {
 	[ -f "$SIGNIFY_SEC" ] || _die "署名鍵が未配置です: ${SIGNIFY_SEC}"
 	[ -f "$FORGEJO_TOKEN_FILE" ] || _die "Forgejo API トークンが未配置: ${FORGEJO_TOKEN_FILE}"
 	TOKEN="$(cat "$FORGEJO_TOKEN_FILE")"
-	GIT_IP=$(_toml "network.dev_lan" "git_vm")
 
 	RELEASES_JSON="$(curl -fsS \
 		-H "Authorization: token ${TOKEN}" \
@@ -402,7 +425,6 @@ cmd_deploy_poll() {
 
 	[ -f "$FORGEJO_TOKEN_FILE" ] || _die "Forgejo API トークンが未配置: ${FORGEJO_TOKEN_FILE}"
 	TOKEN="$(cat "$FORGEJO_TOKEN_FILE")"
-	GIT_IP=$(_toml "network.dev_lan" "git_vm")
 	touch "$DEPLOYED_LOG"
 
 	RELEASES_JSON="$(curl -fsS \
