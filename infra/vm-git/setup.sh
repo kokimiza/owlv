@@ -33,7 +33,12 @@ FORGEJO_STATIC_ROOT="/usr/local/share/forgejo"
 # Forgejo セキュリティ値をプロビジョニング時に生成 (Web UI での手動設定を排除)
 FORGEJO_SECRET_KEY=$(openssl rand -hex 32)     # 64 文字 hex
 FORGEJO_INTERNAL_TOKEN=$(openssl rand -hex 64) # 128 文字 hex
-FORGEJO_ADMIN_PASS=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-24)
+# PASSWORD_COMPLEXITY = lower,upper,digit (下記 app.ini) を確実に満たすため、
+# 純粋な乱数だけに頼らず英小文字/英大文字/数字を1文字ずつ確定で含める
+# (乱数だけだと稀に — 62種からの24文字で約1.5%の確率で — digit クラスを
+# 1つも含まない文字列になり、CLI のパスワード検証で弾かれ得る)。
+# 出現位置は無関係 (検証は文字クラスの存在有無のみを見る) なのでシャッフル不要。
+FORGEJO_ADMIN_PASS="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | cut -c1-21)Aa1"
 # Forgejo は "admin" を /admin Web UI ルートと衝突する予約ユーザー名として
 # 拒否する (CreateUser: name is reserved [name: admin])。CLI サブコマンドの
 # "forgejo admin user ..." の "admin" とは無関係 — そちらはそのままで良い。
@@ -219,6 +224,12 @@ ROOT = ${FORGEJO_DATA}/repositories
 INSTALL_LOCK         = true
 SECRET_KEY           = ${FORGEJO_SECRET_KEY}
 INTERNAL_TOKEN       = ${FORGEJO_INTERNAL_TOKEN}
+MIN_PASSWORD_LENGTH  = 20
+PASSWORD_COMPLEXITY  = lower,upper,digit
+# 起動時は none のまま (自動化がここから先で owlv-admin の API/git 操作を
+# 何度も行うため)。このスクリプト終盤、その自動化がすべて完了した後に
+# admin へ切り替える (下記「2FA 強制」セクション参照)。
+GLOBAL_TWO_FACTOR_REQUIREMENT = none
 
 [packages]
 ENABLED = true
@@ -454,6 +465,22 @@ fi
 # 機能を持たない (push 可否・approve数・マージ実行者しか制御できない) ため、
 # 「main 宛 PR は dev からのみ」は build.yml 側のチェック(下記)と
 # merge_whitelist (実行できるのは責任者のみ) の組み合わせで強制する。
+#
+# 既知の制約 (単一障害点): enable_status_check:true だけでは status_check_contexts
+# が空のため、どの CI ジョブの成功を必須とするか Forgejo サーバー側には
+# 何も指定されていない。つまり現状の「main は dev 経由のみ」という担保は
+# 事実上 build.yml 内のチェックステップ(上記)にのみ依存しており、Runner の
+# 侵害やワークフロー定義の改変に対する二重の防御になっていない。
+# status_check_contexts の値 (例: "build / build (pull_request)") は Forgejo
+# Actions が実際に報告したコンテキスト名からしか正確に拾えず、初回の
+# CI 実行が一度も走っていないプロビジョニング時点では存在しないため、
+# ここで確定値を書き込むことができない。初回 PR (dev 向け) の CI が
+# 1回成功した後、以下で確認・設定すること:
+#   1. Web UI: リポジトリ設定 → ブランチ → main/dev の保護設定 →
+#      「ステータスチェック」欄に表示される実際のコンテキスト名を確認
+#   2. doas sh infra/host/security/forgejo-require-status-check.sh \
+#        main '<確認したコンテキスト名>'
+#      (dev についても同様に実行)
 _log "ブランチ保護を設定 (main)"
 curl -fsS -X POST \
 	-H "Authorization: token ${BOT_TOKEN}" \
@@ -472,13 +499,40 @@ curl -fsS -X POST \
 	_info "ブランチ保護(dev)は既存のためスキップ (失敗時は要手動確認)"
 _ok "ブランチ保護 (dev)"
 
+# ── 管理者アカウントの 2FA 強制 (特権管理) ─────────────────────
+# ここまでの自動化 (リポジトリ作成・workflow push・ブランチ保護) はすべて
+# owlv-admin の BOT_TOKEN/Basic 認証で完結しており、これより後で setup.sh が
+# owlv-admin の API/git 操作を行うことはない。GLOBAL_TWO_FACTOR_REQUIREMENT を
+# ここで admin に切り替えることで、「Web UI で 2FA を有効化する」という
+# 一度きりの手動作業を、この自動化自体を壊さずに要求できる。
+# 対象を "admin" のみにしているのは、将来 dev-join.sh 経由で作られる
+# 非admin開発者アカウントの運用を妨げないため。
+# 注意: 有効化した瞬間から、2FA未設定の owlv-admin は API/git 操作を拒否される
+# ("無効化ユーザー" 相当の扱いになる仕様)。したがって cron の sign-poll/
+# deploy-poll (owl-control.sh, 5分毎) は、人間が Web UI で owlv-admin の
+# 2FA を設定するまで安全側で失敗し続ける (§6.1 鉄則③ の「未設定時は全遮断」と
+# 同じ、フェイルクローズの考え方)。放置せず速やかに設定すること。
+_log "管理者アカウントへの 2FA 強制を有効化 (admin)"
+# OpenBSD sed の -i はバックアップ拡張子(空文字列可)を別引数で要求する
+# (GNU sed のような "-i だけで無バックアップ" という省略形が無い)。
+sed -i '' 's/^GLOBAL_TWO_FACTOR_REQUIREMENT = none$/GLOBAL_TWO_FACTOR_REQUIREMENT = admin/' \
+	"${FORGEJO_DATA}/custom/conf/app.ini"
+rcctl restart forgejo || _die "2FA強制設定を反映するための forgejo 再起動に失敗しました"
+_ok "2FA 強制 (admin) を有効化"
+
 _log "Git VM セットアップ完了"
 echo ""
 echo " 【管理者パスワード — 初回ログイン後に変更してください】"
 echo "   ${FORGEJO_ADMIN_USER} / ${FORGEJO_ADMIN_PASS}"
 echo ""
 echo " 【残りの手動作業】"
-echo "   なし (リポジトリ作成・build.yml 反映・ブランチ保護はすべて自動化済み)"
+echo "   1. 今すぐ Web UI にログインし、${FORGEJO_ADMIN_USER} の 2FA (TOTP) を設定してください。"
+echo "      設定するまで sign-poll/deploy-poll (自動デプロイ) は失敗し続けます"
+echo "      (2FA強制を有効化済みのため — フェイルクローズの意図的な挙動です)。"
+echo "   2. 初回 CI 実行後、ブランチ保護の必須ステータスチェックを設定してください:"
+echo "      doas sh infra/host/security/forgejo-require-status-check.sh main '<コンテキスト名>'"
+echo "      doas sh infra/host/security/forgejo-require-status-check.sh dev  '<コンテキスト名>'"
+echo "      (コンテキスト名は Web UI のブランチ保護設定画面で確認できます)"
 echo ""
 # 08-vm-provision.sh が標準出力からこの行を捕捉して /etc/owlv/forgejo_token (ホスト) へ書き込む。
 echo "DEPLOY_POLL_TOKEN=${BOT_TOKEN}"
